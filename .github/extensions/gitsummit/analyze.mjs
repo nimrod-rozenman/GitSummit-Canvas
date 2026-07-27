@@ -18,7 +18,10 @@ const DECL_RES = [
     // class/interface/type/enum/struct/record, with any modifier soup in front
     /^\s*(?:(?:export|default|public|private|protected|internal|abstract|sealed|static|final|partial|pub)\s+)*(?:class|interface|struct|enum|record|type|trait|protocol)\s+([A-Za-z_$][\w$]*)/,
     // export const foo = / let foo: / var foo =
-    /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[=:]/,
+    // Anchored at column 0 unless exported: an indented `const v = helper(x)`
+    // is a local inside a function, and reporting it as a declaration is what
+    // produced summaries like "Adds v" that tell a reviewer nothing.
+    /^(?:\s*export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[=:]/,
     // python / ruby
     /^\s*def\s+([A-Za-z_]\w*)/,
     // go: func Foo / func (r *T) Foo
@@ -321,6 +324,145 @@ function normalize(p) {
     return out.join("/");
 }
 
+/** Every import specifier a file holds right now, read from its full text. */
+export function importsFromContent(content) {
+    const out = [];
+    for (const line of String(content).split("\n")) {
+        const imp = firstMatch(line, IMPORT_RES);
+        if (imp) out.push(imp);
+    }
+    return unique(out);
+}
+
+/* ------------------------------------------------------------------ *
+ * Purpose, taken from the author's own doc comments
+ * ------------------------------------------------------------------ */
+
+const DOC_MAX = 88;
+/* `#` opens a comment in several languages but also a C preprocessor line and
+   a shebang, neither of which describes the code below it. */
+const NOT_A_COMMENT_RE = /^#\s*(?:include|define|if|ifdef|ifndef|else|elif|endif|pragma|!)/;
+/* Declaration regexes that name a function or a type. A `const` holding a
+   number is documented too, but "what this module now does" is answered by its
+   functions, so those win when both are available. */
+const NAMED_THING = new Set([0, 1, 3, 4, 5, 6]);
+
+/** Which DECL_RE matched, so callers can tell a function from a bare value. */
+function matchDecl(line) {
+    for (let i = 0; i < DECL_RES.length; i++) {
+        const m = line.match(DECL_RES[i]);
+        if (m && m[1]) return { name: m[1], notable: NAMED_THING.has(i) };
+    }
+    return null;
+}
+
+/** The prose inside one comment line, or null when the line isn't a comment. */
+function commentBody(line) {
+    const t = line.trim();
+    if (!t || NOT_A_COMMENT_RE.test(t)) return null;
+    if (t.startsWith("/*")) return t.replace(/^\/\*+/, "").replace(/\*+\/$/, "").trim();
+    if (t.startsWith("*/")) return "";
+    if (t.startsWith("*")) return t.replace(/^\*+\/?/, "").trim();
+    if (t.startsWith("//")) return t.replace(/^\/+!?/, "").trim();
+    if (t.startsWith("#")) return t.replace(/^#+/, "").trim();
+    return null;
+}
+
+/** Cut to `max` on a clause or word boundary, so nothing ends mid-word. */
+function clampSentence(s, max) {
+    if (s.length <= max) return s;
+    const head = s.slice(0, max);
+    const cut = Math.max(
+        head.lastIndexOf(", "),
+        head.lastIndexOf("; "),
+        head.lastIndexOf(": "),
+        head.lastIndexOf(" — "),
+    );
+    const at = cut > max * 0.5 ? cut : head.lastIndexOf(" ");
+    return (at > 0 ? head.slice(0, at) : head).trimEnd().replace(/[,;:]$/, "") + "…";
+}
+
+/** Collapse a comment block to the one short phrase a card can show. */
+function firstSentence(parts) {
+    const text = parts
+        .filter((p) => p && !p.trim().startsWith("@")) // @param/@returns aren't a summary
+        .join(" ")
+        .replace(/[`*_]/g, "") // inline markdown reads as noise in plain text
+        .replace(/\s+/g, " ")
+        .trim();
+    if (!text) return null;
+    // One sentence is the description; the rest is detail the card has no room
+    // for. Abbreviations aside, a period followed by a space ends it.
+    const first = text.split(/(?<=[.!?])\s+/)[0].replace(/[.]$/, "").trim();
+    return first.length < 3 ? null : clampSentence(first, DOC_MAX);
+}
+
+/**
+ * The doc comment directly above line `idx`, reduced to a single short phrase.
+ * Blank lines, decorators and attributes are stepped over so a comment still
+ * counts as documentation when something sits between it and the declaration.
+ */
+function docAbove(lines, idx) {
+    let i = idx - 1;
+    while (i >= 0 && (!lines[i].trim() || /^\s*(?:@|\[|#\[)/.test(lines[i]))) i--;
+
+    const parts = [];
+    for (; i >= 0; i--) {
+        const body = commentBody(lines[i]);
+        if (body === null) break;
+        parts.push(body);
+        if (/^\s*\/\*/.test(lines[i])) break; // reached the opening /**
+        if (parts.length > 12) break; // a licence header is not a description
+    }
+    return firstSentence(parts.reverse());
+}
+
+/**
+ * A docstring on the lines just below a declaration — where Python, and any
+ * language that borrowed the convention, actually puts its documentation.
+ */
+function docBelow(lines, idx) {
+    let i = idx + 1;
+    while (i < lines.length && !lines[i].trim()) i++;
+    if (i >= lines.length) return null;
+
+    const open = lines[i].trim().match(/^[rubf]{0,2}("""|''')/i);
+    if (!open) return null;
+    const q = open[1];
+    const head = lines[i].trim().slice(lines[i].trim().indexOf(q) + 3);
+    const end = head.indexOf(q);
+    if (end >= 0) return firstSentence([head.slice(0, end)]);
+
+    const parts = [head];
+    for (i++; i < lines.length && parts.length < 12; i++) {
+        const close = lines[i].indexOf(q);
+        if (close >= 0) {
+            parts.push(lines[i].slice(0, close));
+            break;
+        }
+        parts.push(lines[i]);
+    }
+    return firstSentence(parts);
+}
+
+/**
+ * Map every declaration in a file to the sentence its author wrote above it.
+ * This is the one place a summary can say what a function is *for* rather than
+ * merely that it appeared — and it stays honest, because the words are the
+ * author's, not ours.
+ */
+export function docsFromContent(content) {
+    const lines = String(content).split("\n");
+    const docs = {};
+    for (let i = 0; i < lines.length; i++) {
+        const hit = matchDecl(lines[i]);
+        if (!hit || docs[hit.name]) continue;
+        const text = docAbove(lines, i) ?? docBelow(lines, i);
+        if (text) docs[hit.name] = { text, notable: hit.notable };
+    }
+    return docs;
+}
+
 /** Attach `links: [{ to, kind }]` to every file, in place. */
 export function linkFiles(files, signals) {
     const changed = new Set(files.map((f) => f.path));
@@ -334,16 +476,28 @@ export function linkFiles(files, signals) {
         const sig = signals.get(f.path);
         const links = [];
         const seen = new Set();
+        const liveTargets = new Set();
         const add = (spec, kind) => {
             const to = resolveLink(f.path, spec, changed, byBase);
             if (!to || seen.has(to + kind)) return;
+            // A file that still imports its neighbour is not "unlinked from"
+            // it, however the specifier was rewritten along the way.
+            if (kind === "del" && liveTargets.has(to)) return;
             seen.add(to + kind);
+            if (kind !== "del") liveTargets.add(to);
             links.push({ to, kind });
         };
-        for (const spec of sig?.addedImports ?? []) add(spec, "add");
+        // Live links come from what the file imports *now*, not only from the
+        // import lines this diff happened to touch — two changed files that
+        // already referenced each other are still related, and that
+        // relationship is the whole point of the diagram. `addedImports` is
+        // still unioned in so a deleted file, or one we could not read, keeps
+        // whatever the diff did tell us.
+        const live = unique([...(sig?.currentImports ?? []), ...(sig?.addedImports ?? [])]);
+        for (const spec of live) add(spec, "add");
         for (const spec of sig?.removedImports ?? []) {
             // An import that was only moved around still exists; ignore those.
-            if ((sig?.addedImports ?? []).includes(spec)) continue;
+            if (live.includes(spec)) continue;
             add(spec, "del");
         }
         f.links = links;
@@ -357,15 +511,15 @@ export function linkFiles(files, signals) {
 function listPhrase(arr, max = 3) {
     const a = arr.slice(0, max);
     const extra = arr.length - a.length;
-    let s = a.length <= 1 ? a.join("") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1];
-    if (extra) s += " and " + extra + " more";
-    return s;
+    // "a, b and c and 3 more" reads badly, so an overflow list stays comma-
+    // separated and spends its only "and" on the count.
+    if (extra) return a.join(", ") + " and " + extra + " more";
+    return a.length <= 1 ? a.join("") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1];
 }
 
-/** Long lists read as noise, so past a handful lead with the count instead. */
+/** Long lists read as noise, so past a handful name a few and count the rest. */
 function many(arr, max = 3) {
-    if (arr.length <= max + 1) return listPhrase(arr, max + 1);
-    return `${arr.length} declarations including ${listPhrase(arr.slice(0, max), max)}`;
+    return listPhrase(arr, arr.length <= max + 1 ? max + 1 : max);
 }
 
 const KIND_NOUN = {
@@ -385,15 +539,17 @@ const KIND_NOUN = {
 
 /**
  * A 1–3 sentence description of what happened to one file.
- * Falls back to plain magnitude when no signal survives the regexes, so this
- * always returns something useful and never throws.
+ *
+ * Deliberately says nothing about line counts or hunk counts: the card already
+ * shows the status badge and +/− beside this text, so repeating them here would
+ * spend the only prose we have on numbers the reader can already see. What the
+ * reader cannot see is *what the code is for*, so that leads instead.
  */
 export function describeFile(file, sig) {
     try {
         const role = roleOf(file.path);
         const noun = KIND_NOUN[role] ?? "module";
-        const add = file.additions || 0;
-        const del = file.deletions || 0;
+        const docs = sig?.docs ?? {};
         const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
         const out = [];
 
@@ -403,26 +559,22 @@ export function describeFile(file, sig) {
             return `Binary ${noun} ${verb} — there is no textual diff to review.`;
         }
 
-        // 1. What kind of change this is.
+        // 1. Status, but only when it carries something the badge does not.
         if (file.status === "A") {
-            out.push(`New ${noun}${add ? ` — ${plural(add, "line")}` : ""}.`);
+            out.push(`New ${noun}.`);
         } else if (file.status === "D") {
             const what = sig?.removedDecls?.length
                 ? `, removing ${listPhrase(sig.removedDecls)}`
                 : "";
-            out.push(`Deleted ${noun}${del ? ` — ${plural(del, "line")} gone` : ""}${what}.`);
+            out.push(`Deleted ${noun}${what}.`);
         } else if (file.status === "R" || file.status === "C") {
             const verb = file.status === "R" ? "Renamed" : "Copied";
-            out.push(
-                `${verb} from ${file.oldPath}${add + del ? ` and edited (+${add}/−${del})` : " with no content change"}.`,
-            );
-        } else {
-            out.push(
-                `Edited — +${add}/−${del}${sig?.hunks > 1 ? ` across ${sig.hunks} hunks` : ""}.`,
-            );
+            out.push(`${verb} from ${file.oldPath}.`);
         }
+        // A plain edit gets no status sentence at all — "Edited" next to an
+        // "M" badge and a +12/−3 count is three ways of saying one thing.
 
-        // 2. What is inside the change.
+        // 2. What the change is actually about.
         if (file.status !== "D") {
             // Prefer the public surface: on a new 500-line module, "adds these
             // three exports" is the useful sentence, not a roll-call of locals.
@@ -433,17 +585,19 @@ export function describeFile(file, sig) {
                 if (sig.removedTests) parts.push(`removes ${plural(sig.removedTests, "test case")}`);
                 out.push(cap(parts.join(" and ") + "."));
             } else if (introduced?.length && sig?.removedDecls?.length) {
-                out.push(`Adds ${many(introduced)}; removes ${listPhrase(sig.removedDecls)}.`);
+                out.push(withPurpose("Adds", introduced, docs, sig.removedDecls));
             } else if (introduced?.length) {
-                out.push(`Adds ${many(introduced)}.`);
+                out.push(withPurpose("Adds", introduced, docs));
             } else if (sig?.removedDecls?.length) {
                 out.push(`Removes ${listPhrase(sig.removedDecls)}.`);
             } else if (sig?.editedDecls?.length) {
-                out.push(`Reworks ${many(sig.editedDecls)}.`);
+                out.push(withPurpose("Reworks", sig.editedDecls, docs));
             } else if (sig?.sections?.length && role !== "docs" && role !== "asset") {
                 // git's hunk context is the nearest preceding line, which in
                 // prose files is just a sentence — only useful for code.
-                out.push(`Touches ${listPhrase(sig.sections.map(shortSection))}.`);
+                out.push(
+                    withPurpose("Changes code inside", unique(sig.sections.map(shortSection)), docs),
+                );
             }
         }
 
@@ -471,6 +625,10 @@ export function describeFile(file, sig) {
             }
         }
 
+        if (!out.length) {
+            const churn = (file.additions || 0) + (file.deletions || 0);
+            return churn ? `Edited ${noun}.` : `No content change.`;
+        }
         return out.slice(0, 3).join(" ");
     } catch {
         const churn = (file.additions || 0) + (file.deletions || 0);
@@ -478,9 +636,41 @@ export function describeFile(file, sig) {
     }
 }
 
+/** Keep a doc sentence flowing after an em dash without shouting mid-clause. */
+const lowerFirst = (s) => (/^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s);
+
+/**
+ * "Adds importsFromContent — every import specifier a file holds right now."
+ *
+ * Names alone ("Adds importsFromContent") tell a reviewer nothing they can act
+ * on, so where the author documented the thing we borrow their sentence. A
+ * documented function or type leads over a documented constant; the remaining
+ * names are counted rather than recited, since the doc has already spent the
+ * line and the names are listed as chips anyway.
+ */
+function withPurpose(verb, names, docs, removed) {
+    const tail = removed?.length ? ` Removes ${listPhrase(removed)}.` : "";
+    const lead =
+        names.find((n) => docs[n]?.notable) ?? names.find((n) => docs[n]);
+    if (!lead) return `${verb} ${many(names)}.${tail}`;
+    const rest = names.length - 1;
+    const also = rest > 0 ? ` (+${rest} more)` : "";
+    return `${verb} ${lead} — ${lowerFirst(docs[lead].text)}${also}.${tail}`;
+}
+
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const shortSpec = (s) => s.split("/").slice(-2).join("/");
-const shortSection = (s) => s.replace(/\s*\{.*$/, "").trim().slice(0, 48);
+
+/**
+ * git's hunk header carries the enclosing line verbatim ("export function
+ * helper(a) {"). Reduce it to the bare name so a summary reads like prose
+ * rather than pasted code, falling back to trimmed text when no name is found.
+ */
+function shortSection(s) {
+    const text = String(s).replace(/\s*\{.*$/, "").trim();
+    const name = firstMatch(text, DECL_RES);
+    return name || text.slice(0, 48);
+}
 
 /** Compact chips shown under the summary. */
 export function signalChips(file, sig) {

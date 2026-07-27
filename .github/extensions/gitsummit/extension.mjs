@@ -207,7 +207,7 @@ function commentsMarkdown(inst) {
 }
 
 /* ------------------------------------------------------------------ *
- * Opening a file in the reviewer's editor
+ * Opening a file for the reviewer
  * ------------------------------------------------------------------ */
 
 function run(cmd, args) {
@@ -218,8 +218,36 @@ function run(cmd, args) {
     });
 }
 
-/** Try the user's editor, then fall back to whatever the OS associates. */
-async function openInEditor(abs) {
+// One stable id: re-opening the host's editor canvas with the same instance
+// swaps the file in place, so review stays in a single panel instead of
+// accumulating one per file.
+const EDITOR_INSTANCE = "gitsummit-file";
+
+/**
+ * Show a file inside the Copilot app that hosts this canvas, by opening the
+ * built-in editor canvas next to us. Reviewing shouldn't throw the reader out
+ * into another application.
+ */
+async function openInApp(relPath) {
+    try {
+        await session.rpc.canvas.open({
+            canvasId: "editor",
+            instanceId: EDITOR_INSTANCE,
+            input: {
+                scope: "repo",
+                path: relPath,
+                title: relPath.split("/").pop(),
+                placement: { focus: true },
+            },
+        });
+        return "Copilot";
+    } catch {
+        return null;
+    }
+}
+
+/** Last resort only: the host could not show the file itself. */
+async function openExternally(abs) {
     if (await run("code", ["-g", abs])) return "VS Code";
     if (process.platform === "win32") {
         if (await run("cmd", ["/c", "start", "", abs])) return "system default";
@@ -321,7 +349,8 @@ async function startServer(inst) {
                     return;
                 }
                 const root = rundown.repo?.root ?? (await repoRoot(inst.cwd));
-                const how = await openInEditor(path.join(root, target));
+                const how =
+                    (await openInApp(target)) ?? (await openExternally(path.join(root, target)));
                 sendJson(res, how ? { ok: true, how } : { ok: false, error: "No editor available." });
                 return;
             }

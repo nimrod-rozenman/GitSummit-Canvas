@@ -424,7 +424,7 @@ function diffToolsHtml(f, key) {
               '" title="Open this diff full screen">⤢ Full screen</button>') +
         '<button class="tbtn" data-openfile="' +
         esc(f.path) +
-        '" title="Open this file in your editor">↗ Open file</button>' +
+        '" title="Open this file in the Copilot app">↗ Open file</button>' +
         '<button class="tbtn" data-comment="' +
         esc(f.path) +
         '" data-key="' +
@@ -1216,10 +1216,56 @@ function attachFocus(svg, g, cardEls, linkEls) {
     };
 }
 
-/* ---- one short line of "what this file does" for the diagram card ---- */
+/* ---- the most useful line of "what changed" for the diagram card ---- */
+
+/* The opening sentence of a summary leads with magnitude ("Edited — +12/−3"),
+   which the card already carries as a badge. Showing it again wastes the only
+   space we have, so it yields to whatever the summary says next. */
+const MAGNITUDE_RE = /^(?:Edited|New |Deleted|Renamed|Copied|Binary)/;
+/* …but the opening sentence sometimes carries the only real information (a
+   rename source, what a deletion took with it). Strip just the churn clause and
+   keep the rest. */
+const CHURN_RE = /\s*(?:—\s*(?:[+\d][^,]*|there is no textual diff[^,]*)|\(\+\d+\/−\d+\))/g;
+
+function summarySentences(f) {
+    return String(f.summary || "")
+        .split(/\.\s+/)
+        .map((s) => s.trim().replace(/\.$/, ""))
+        .filter(Boolean);
+}
+
 function contextLine(f) {
-    const first = String(f.summary || "").split(/\.\s/)[0];
-    return first ? first.replace(/\.$/, "") : "";
+    const parts = summarySentences(f);
+    const body = parts.filter((s) => !MAGNITUDE_RE.test(s));
+    if (body.length) return body.join(" · ");
+    const lead = (parts[0] || "").replace(CHURN_RE, "").replace(/[\s,]+$/, "");
+    // A bare "Edited"/"Edited module" says nothing the badge and counts don't;
+    // name the role instead, which appears nowhere else on the node.
+    if (lead && !/^edited\b/i.test(lead)) return lead;
+    return ROLE_LABEL[f.role] || "";
+}
+
+/** Greedy word wrap into at most `max` lines, last line clipped with an ellipsis. */
+function wrapText(text, cols, max) {
+    const lines = [];
+    let line = "";
+    for (const word of String(text).split(/\s+/).filter(Boolean)) {
+        const next = line ? line + " " + word : word;
+        if (next.length <= cols || !line) {
+            line = next;
+            continue;
+        }
+        lines.push(line);
+        line = word;
+        if (lines.length === max) break;
+    }
+    if (lines.length < max && line) lines.push(line);
+    if (!lines.length) return [];
+    // Anything that did not fit is signalled on the final line.
+    const used = lines.join(" ").length;
+    if (used < String(text).replace(/\s+/g, " ").trim().length)
+        lines[lines.length - 1] = clip(lines[lines.length - 1] + " …", cols);
+    return lines.map((l) => clip(l, cols));
 }
 
 function arrowHead(x, y) {
@@ -1232,7 +1278,9 @@ function arrowHead(x, y) {
     });
 }
 
-const CARD_H = 62;
+const CTX_LINES = 2;
+const CTX_LEADING = 13;
+const CARD_H = 62 + (CTX_LINES - 1) * CTX_LEADING;
 
 function drawCard(f, x, y, w, g) {
     const card = el("g", { class: "cardnode fade-in" });
@@ -1333,9 +1381,16 @@ function drawCard(f, x, y, w, g) {
 
     const ctx = contextLine(f);
     if (ctx) {
-        const c = el("text", { class: "cctx", x: x + 12, y: y + 49 });
-        c.textContent = clip(ctx, Math.max(10, Math.floor((w - 22) / 5.35)));
-        card.appendChild(c);
+        const cols = Math.max(10, Math.floor((w - 22) / 5.35));
+        wrapText(ctx, cols, CTX_LINES).forEach((line, i) => {
+            const c = el("text", {
+                class: "cctx",
+                x: x + 12,
+                y: y + 49 + i * CTX_LEADING,
+            });
+            c.textContent = line;
+            card.appendChild(c);
+        });
     }
 
     wireNode(card, f, { uses: uses, usedBy: usedBy });

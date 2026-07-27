@@ -11,6 +11,8 @@ import path from "node:path";
 import {
     parseSignalDiff,
     signalsFromContent,
+    importsFromContent,
+    docsFromContent,
     describeFile,
     signalChips,
     linkFiles,
@@ -24,6 +26,8 @@ const DIFF_MAX_BUFFER = 128 * 1024 * 1024; // diffs can be large
 const MAX_DIFF_LINES = 8000; // cap a single file's rendered diff
 const FULL_CONTEXT = 20000; // "whole file" view: enough context to cover it
 const UNTRACKED_MAX_BYTES = 2 * 1024 * 1024; // cap untracked file reads
+const CONTENT_SCAN_MAX_BYTES = 256 * 1024; // per file, when reading working-tree text
+const CONTENT_SCAN_MAX_FILES = 500; // total files read for imports and docs
 
 /**
  * Run git with an argv array (no shell) in `cwd`. Never rejects on a non-zero
@@ -246,6 +250,34 @@ const STATUS_LABEL = {
 };
 
 /**
+ * Read each changed file as it stands now and record two things the diff alone
+ * cannot give us: every import it currently holds (so the dependency graph
+ * reflects how the change hangs together, not just the import lines this diff
+ * touched) and the doc comment above each declaration (so a summary can say
+ * what the code is *for*). Deleted, binary and asset files are skipped, and the
+ * scan is bounded in bytes and file count so a huge change stays fast. Failure
+ * is silent: this is enrichment, never a reason to fail the rundown.
+ */
+async function attachContentSignals(fileList, signals, root) {
+    let budget = CONTENT_SCAN_MAX_FILES;
+    for (const f of fileList) {
+        if (f.status === "D" || f.binary || f.role === "asset") continue;
+        if (budget <= 0) break;
+        budget--;
+        try {
+            const buf = await readFile(path.join(root, f.path), "utf8");
+            const text = buf.slice(0, CONTENT_SCAN_MAX_BYTES);
+            const sig = signals.get(f.path) ?? { path: f.path };
+            sig.currentImports = importsFromContent(text);
+            sig.docs = docsFromContent(text);
+            signals.set(f.path, sig);
+        } catch {
+            /* unreadable or genuinely binary: fall back to the diff's imports */
+        }
+    }
+}
+
+/**
  * Compute the full rundown payload for `cwd`. `baseOverride` optionally forces
  * the comparison base.
  */
@@ -371,9 +403,13 @@ export async function computeRundown(cwd, baseOverride) {
         }
     }
 
+    // Roles first: the content scan skips assets, and describeFile needs the
+    // doc comments that scan collects.
+    for (const f of fileList) f.role = roleOf(f.path);
+    await attachContentSignals(fileList, signals, root);
+
     for (const f of fileList) {
         const sig = signals.get(f.path);
-        f.role = roleOf(f.path);
         f.summary = describeFile(f, sig);
         f.signals = signalChips(f, sig);
         f.hunks = sig?.hunks ?? 0;
