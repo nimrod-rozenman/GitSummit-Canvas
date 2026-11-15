@@ -18,67 +18,30 @@ the host's vendor.
 
 ## ⚡ Quick start
 
-### GitHub Copilot app
+<p>
+  <a href="https://github.com/github/app">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/icons/copilot-dark.svg" />
+      <img src="docs/icons/copilot.svg" alt="GitHub Copilot desktop app" width="40" height="40" />
+    </picture>
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://code.visualstudio.com/"><img src="docs/icons/vscode.png" alt="Visual Studio Code" width="40" height="40" /></a>
+</p>
 
-**1. Open the GitHub Copilot app. Select Customize in the sidebar.**
-
-![Customize selected in the GitHub Copilot sidebar](docs/screenshots/github-copilot-customize.png)
-
-**2. Select Add → Canvas from URL…**
-
-![The Add menu with Canvas from URL highlighted](docs/screenshots/github-copilot-add-canvas.png)
-
-**3. Paste this URL:**
-
-```text
-https://github.com/nimrod-rozenman/GitSummit-Canvas/tree/main/.github/extensions/gitsummit
-```
-
-Complete the installation prompts. Choose **User** scope if asked.
-
-**4. Open a project session. Send this message:**
-
-```text
-Open GitSummit
-```
-
-GitSummit opens beside the chat and shows your project's changes.
-If the project has no changes, there is nothing to review yet.
-You only install once. In another project session, ask **Open GitSummit** again.
-
-No terminal commands or build step are required.
-If the repository is private, your GitHub account needs access.
-
-### VS Code — Copilot Chat
-
-Open **Copilot Chat** in VS Code. Select **Agent** mode. Send this prompt:
+In the **GitHub Copilot app** or **Visual Studio Code** chat, send the prompt below.
+Use **Agent** mode in VS Code.
 
 ```text
 install this canvas https://github.com/nimrod-rozenman/GitSummit-Canvas/tree/main/.github/extensions/gitsummit
 ```
 
-Review and approve the installation prompts.
-This asks the agent to install the extension files. Viewing the canvas still
-requires a host with canvas-extension support.
-
-<details>
-<summary>Manual installation</summary>
-
-Copy the `.github/extensions/gitsummit/` folder from this repository to one of these locations:
-
-| Scope | Path |
-| --- | --- |
-| **User** (every project) | `~/.copilot/extensions/gitsummit/` |
-| **Project** (one project) | `<your-project>/.github/extensions/gitsummit/` |
-
-Restart the session. Then ask **Open GitSummit**.
-The host must support canvas extensions.
-
-</details>
+Approve the installation prompts. Then ask **Open GitSummit**.
+Viewing the canvas requires a host with canvas-extension support.
 
 ---
 
-## 🧭 The problem
+## 🔍 Beyond the diff
 
 An agent finishes a task and hands you a diff. `git diff` shows you *lines*. A PR view shows you *files, alphabetically*. Neither tells you the thing you actually need before you press **Create pull request**:
 
@@ -446,6 +409,7 @@ account lacks permission to create symbolic links.
 No license has been selected for this repository. Public visibility alone does
 not grant permission to reuse or redistribute its code. The owner must confirm
 publication rights and select a license before presenting it as open source.
+Third-party icons retain their own [licenses and usage terms](docs/icons/README.md).
 
 ---
 
