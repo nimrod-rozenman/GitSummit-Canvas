@@ -1,15 +1,6 @@
-// Extension: gitsummit
-//
-// A repo-agnostic pre-PR review canvas. After a coding agent finishes making
-// changes, open GitSummit to see what changed, how the pieces depend on each
-// other, and what looks most likely to break, before opening a pull request.
-//
-// The canvas operates on whatever workspace the session is running in: on open
-// we capture the session's working directory and drive everything from `git`
-// (see git.mjs / analyze.mjs). The repository is the source of truth and we
-// recompute on every open, refresh, and repo change. The only state we hold is
-// the reviewer's comments, kept in memory for the life of the canvas so an
-// agent action can read them back — nothing is written into the repository.
+// User-global Source Control and pre-PR review for the active session worktree.
+// Review actions are read-only. Git mutations require a file action or a
+// confirmed, single-use preview through the authenticated loopback UI.
 
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -17,9 +8,12 @@ import { watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 
 import { joinSession, createCanvas, CanvasError } from "@github/copilot-sdk/extension";
 import { computeRundown, getFileDiff, summarize, repoRoot, fingerprint } from "./git.mjs";
+import { SourceControl, sourceDiff } from "./source-control.mjs";
+import { authorizeRequest } from "./http-guard.mjs";
 
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
 
@@ -28,6 +22,8 @@ const STATIC = {
     "/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
     "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/source-control.js": { file: "source-control.js", type: "text/javascript; charset=utf-8" },
+    "/source-control.css": { file: "source-control.css", type: "text/css; charset=utf-8" },
 };
 
 const WATCH_DEBOUNCE_MS = 400;
@@ -298,6 +294,8 @@ function handleSse(inst, req, res) {
 
 async function startServer(inst) {
     const server = createServer(async (req, res) => {
+        res.setHeader("Referrer-Policy", "no-referrer");
+        res.setHeader("X-Content-Type-Options", "nosniff");
         let url;
         try {
             url = new URL(req.url, "http://127.0.0.1");
@@ -308,6 +306,29 @@ async function startServer(inst) {
         const pathname = url.pathname;
 
         try {
+            if (!authorizeRequest(req, url, inst)) {
+                sendJson(res, { error: "This request is not authorized for this canvas." }, 403);
+                return;
+            }
+            if (pathname.startsWith("/api/source/")) {
+                const action = pathname.slice("/api/source/".length);
+                const expectedMethod = ["prepare", "execute"].includes(action) ? "POST" : "GET";
+                if (req.method !== expectedMethod) {
+                    sendJson(res, { error: `Use ${expectedMethod}.` }, 405);
+                    return;
+                }
+                if (action === "status") sendJson(res, await inst.source.status(url.searchParams.get("ref")));
+                else if (action === "diff") sendJson(res, await sourceDiff(inst.cwd, {
+                    kind: url.searchParams.get("kind"), path: url.searchParams.get("path"), ref: url.searchParams.get("ref"),
+                }));
+                else if (action === "output") sendJson(res, inst.source.output);
+                else if (action === "prepare") sendJson(res, await inst.source.prepare(await readBody(req)));
+                else if (action === "execute") {
+                    try { sendJson(res, await inst.source.execute(await readBody(req))); }
+                    finally { broadcast(inst, { type: "refresh" }); }
+                } else sendJson(res, { error: "Unknown Source Control endpoint." }, 404);
+                return;
+            }
             if (pathname === "/events") {
                 handleSse(inst, req, res);
                 return;
@@ -378,16 +399,20 @@ async function startServer(inst) {
         }
     });
 
-    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+    });
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : 0;
     inst.server = server;
-    inst.url = `http://127.0.0.1:${port}/`;
+    inst.origin = `http://127.0.0.1:${port}`;
+    inst.url = `${inst.origin}/?token=${inst.token}`;
 }
 
 /** Resolve the working directory to inspect, most specific first. */
 function resolveCwd(ctx) {
-    return ctx?.session?.workingDirectory || session?.workspacePath || process.cwd();
+    return ctx?.session?.workingDirectory || process.cwd();
 }
 
 function getOrInit(instanceId) {
@@ -409,6 +434,8 @@ function getOrInit(instanceId) {
             fingerprint: null,
             comments: [],
             commentSeq: 0,
+            token: randomBytes(32).toString("hex"),
+            source: null,
         };
         instances.set(instanceId, inst);
     }
@@ -421,7 +448,7 @@ const session = await joinSession({
             id: "gitsummit",
             displayName: "GitSummit",
             description:
-                "Pre-PR review: what changed on this branch, how the changed files depend on each other, and what looks most likely to break — with per-file summaries, a dependency flow diagram, and review comments you can hand back to the agent.",
+                "Global Git Source Control with staged changes, remote comparisons, confirmed Git operations, and the existing pre-PR diagram, diffs, and review comments.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -438,13 +465,26 @@ const session = await joinSession({
             },
             actions: [
                 {
+                    name: "source_status",
+                    description: "Read local changes, upstream state and a selected remote branch comparison. Does not fetch or modify Git.",
+                    inputSchema: {
+                        type: "object",
+                        properties: { ref: { type: "string", description: "Existing remote-tracking branch name." } },
+                        additionalProperties: false,
+                    },
+                    handler: async (ctx) => {
+                        const inst = instances.get(ctx.instanceId);
+                        if (!inst) throw new CanvasError("not_open", "GitSummit is not open.");
+                        return await inst.source.status(ctx.input?.ref);
+                    },
+                },
+                {
                     name: "refresh",
                     description:
                         "Recompute the rundown from the current git state and push the update to the open canvas.",
                     handler: async (ctx) => {
                         const inst = instances.get(ctx.instanceId);
                         if (!inst) throw new CanvasError("not_open", "GitSummit is not open.");
-                        if (ctx.session?.workingDirectory) inst.cwd = ctx.session.workingDirectory;
                         const rundown = await ensureRundown(inst);
                         inst.fingerprint = await fingerprint(inst.cwd).catch(() => inst.fingerprint);
                         broadcast(inst, { type: "refresh" });
@@ -512,6 +552,7 @@ const session = await joinSession({
             open: async (ctx) => {
                 const inst = getOrInit(ctx.instanceId);
                 inst.cwd = resolveCwd(ctx);
+                if (!inst.source || inst.source.cwd !== inst.cwd) inst.source = new SourceControl(inst.cwd);
                 if (typeof ctx.input?.base === "string" && ctx.input.base.trim()) {
                     inst.baseOverride = ctx.input.base.trim();
                 }

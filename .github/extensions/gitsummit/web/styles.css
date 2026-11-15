@@ -1,17 +1,18 @@
 /* ============================================================
-   GitSummit owns its palette: Graphite. Fixed values rather than
+   All tabs share the Source Control dark palette. Fixed values rather than
    host theme tokens, so the canvas looks the same in every app
    theme. One theme, so there is no light/dark branch to keep in
    sync either.
    ============================================================ */
 :root {
-    --bg: #2a2d2e;
-    --bg-inset: #232627;
-    --bg-muted: rgba(155, 165, 168, 0.12);
-    --border: #464a4c;
-    --border-muted: rgba(155, 165, 168, 0.2);
-    --text: #cfd3d4;
-    --muted: #8b9294;
+    --page-gutter: 16px;
+    --bg: #252526;
+    --bg-inset: #1e1e1e;
+    --bg-muted: #3c3c3c;
+    --border: #464646;
+    --border-muted: rgba(255, 255, 255, 0.12);
+    --text: #cccccc;
+    --muted: #999999;
     --accent: #5fa8e8;
 
     --add: #5cb35c;
@@ -80,7 +81,8 @@ button {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 9px 14px 8px;
+    padding: 9px var(--page-gutter) 8px;
+    background: var(--bg);
     flex: 0 0 auto;
 }
 .topline {
@@ -131,6 +133,7 @@ button {
     gap: 8px;
     flex-wrap: wrap;
     min-width: 0;
+    min-height: 20px;
 }
 
 .repo-name {
@@ -162,11 +165,13 @@ button {
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
+    min-height: 20px;
 }
 .stamp {
     font-size: 11px;
     color: var(--muted);
     white-space: nowrap;
+    min-height: 14px;
 }
 .btn {
     display: inline-flex;
@@ -212,9 +217,11 @@ button {
 .tabs {
     position: relative;
     display: flex;
+    overflow-x: auto;
+    scrollbar-width: thin;
     align-items: flex-end;
     gap: 2px;
-    padding: 0 14px;
+    padding: 0 var(--page-gutter);
     border-bottom: 1px solid var(--border);
     flex: 0 0 auto;
 }
@@ -228,13 +235,15 @@ button {
 .tab {
     position: relative;
     display: inline-flex;
+    flex-shrink: 0;
+    white-space: nowrap;
     align-items: center;
     gap: 7px;
     padding: 8px 12px 9px;
     border: 0;
     background: none;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--muted);
     border-radius: 7px 7px 0 0;
     transition: color 0.14s ease, background 0.14s ease;
@@ -250,6 +259,8 @@ button {
 .tab .count {
     font-size: 11px;
     font-variant-numeric: tabular-nums;
+    min-width: 22px;
+    text-align: center;
     padding: 0 6px;
     border-radius: 999px;
     background: var(--bg-muted);
@@ -286,15 +297,38 @@ button {
 }
 .panel.active {
     display: flex;
+    animation: panelReveal 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+@keyframes panelReveal {
+    from { opacity: 0.65; }
+    to { opacity: 1; }
+}
+.review-status {
+    position: absolute;
+    top: 12px;
+    left: var(--page-gutter);
+    right: var(--page-gutter);
+    z-index: 6;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 12px;
+    pointer-events: none;
+}
+.review-status.error { color: var(--del); }
+.review-status[hidden], .source-active .review-status { display: none; }
 
 /* ---- narrow side panel: give everything its own line ---- */
 @media (max-width: 620px) {
+    :root { --page-gutter: 12px; }
     .hint {
         margin-left: 0;
         flex-basis: 100%;
     }
-    .filterbar,
+    .review-controls,
+    .source-toolbar,
     .dbar,
     .scroll {
         padding-left: 12px;
@@ -323,14 +357,33 @@ button {
     }
 }
 .filterbar {
+    position: relative;
+    border-bottom: 1px solid var(--border-muted);
+    flex: 0 0 auto;
+}
+.review-controls {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 9px 16px;
-    border-bottom: 1px solid var(--border-muted);
-    flex: 0 0 auto;
+    padding: 9px var(--page-gutter);
     flex-wrap: wrap;
 }
+.source-toolbar {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 3px 12px;
+    padding: 9px var(--page-gutter);
+    font-size: 12px;
+    color: var(--muted);
+}
+.source-toolbar strong { color: var(--text); font-weight: 600; }
+.source-active .review-controls { visibility: hidden; pointer-events: none; }
+.source-active .source-toolbar { display: flex; }
+.tabtools.inactive { visibility: hidden; pointer-events: none; }
 .filter {
     flex: 0 1 210px;
     min-width: 120px;
@@ -644,7 +697,7 @@ button {
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
-    padding: 12px 16px 32px;
+    padding: 12px var(--page-gutter) 32px;
 }
 
 .cards {
@@ -1262,6 +1315,19 @@ tr.meta td.code {
     font-size: 12px;
     color: var(--muted);
 }
+.diff-body { position: relative; }
+.diff-refresh {
+    position: absolute;
+    top: 5px;
+    right: 8px;
+    z-index: 4;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--muted);
+    font: 11px var(--sans);
+    pointer-events: none;
+}
 .empty {
     display: grid;
     place-items: center;
@@ -1281,7 +1347,7 @@ tr.meta td.code {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 10px 16px;
+    padding: 10px var(--page-gutter);
     border-bottom: 1px solid var(--border-muted);
     flex: 0 0 auto;
     flex-wrap: wrap;
@@ -1845,4 +1911,12 @@ svg.focus .arrow.on {
 }
 .dir-counts .d {
     color: var(--del);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
 }

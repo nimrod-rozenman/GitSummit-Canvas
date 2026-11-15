@@ -18,13 +18,15 @@ account identities.
 
 | File | Content |
 | --- | --- |
+| [tab-source-control.png](tab-source-control.png) | Staged and unstaged changes, cached remote comparison, and a diff below the controls |
 | [tab-diagram.png](tab-diagram.png) | Dependency layers in the synthetic `example-catalog` project |
 | [tab-changes.png](tab-changes.png) | A file summary and diff for synthetic catalog search code |
 | [tab-commits.png](tab-commits.png) | Demonstration commits and a directory summary |
 
 These images show the actual canvas renderer with generated example data.
 They do not include the host app's window or sidebar. The project, source code,
-branch, author, and commit history are synthetic. Unused space below the
+branch, author, commit history, and generic demo paths are synthetic. Every
+capture includes the Source Control tab. Unused space below the
 Changes and Commits content is cropped.
 
 ## Review before publication

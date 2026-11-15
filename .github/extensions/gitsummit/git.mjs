@@ -33,18 +33,23 @@ const CONTENT_SCAN_MAX_FILES = 500; // total files read for imports and docs
  * Run git with an argv array (no shell) in `cwd`. Never rejects on a non-zero
  * exit; returns { ok, stdout, stderr, code } so callers can branch on failure.
  */
-function git(cwd, args, { maxBuffer = 1024 * 1024 } = {}) {
+export function git(cwd, args, { maxBuffer = 1024 * 1024, timeout = 30000 } = {}) {
     return new Promise((resolve) => {
         execFile(
             "git",
-            args,
-            { cwd, maxBuffer, windowsHide: true, encoding: "utf8" },
+            ["--no-pager", "--literal-pathspecs", ...args],
+            {
+                cwd, maxBuffer, timeout, windowsHide: true, encoding: "utf8",
+                env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GIT_OPTIONAL_LOCKS: "0" },
+            },
             (err, stdout, stderr) => {
                 if (err) {
                     resolve({
                         ok: false,
                         stdout: stdout ?? "",
-                        stderr: stderr ?? String(err),
+                        stderr: err.killed
+                            ? "Git timed out. Delivery may be unknown. Refresh and inspect before retrying."
+                            : stderr || String(err),
                         code: typeof err.code === "number" ? err.code : 1,
                     });
                 } else {

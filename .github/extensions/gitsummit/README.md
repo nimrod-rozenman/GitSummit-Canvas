@@ -1,18 +1,43 @@
 # GitSummit
 
-A **repo-agnostic review canvas** for a canvas-capable GitHub Copilot host. After a coding agent
+A **repo-agnostic Source Control and review canvas** for a canvas-capable GitHub Copilot host. After a coding agent
 finishes making changes, open **GitSummit** to see what changed, how the changed files
 depend on each other, and what looks most likely to break — before you open a pull request.
 
 It works in any repository: it inspects whatever workspace the session is running in via
 `git`, so nothing here is specific to one project.
 
-This repository version provides the three review tabs below. It does not
-include Git staging, commit, fetch, pull, or push controls. It uses the
-host-provided `@github/copilot-sdk` and Node built-ins; no build or separate
+It opens in Source Control and includes the three review tabs below. It uses
+the host-provided `@github/copilot-sdk` and Node built-ins. No build or separate
 dependency installation is required.
 
-## The three tabs
+## Source Control
+
+Repository controls sit above the selected diff at every width. All four tabs
+share the same dark palette.
+
+- Stage and unstage individual files. Unstage preserves working files.
+- Enter a message to commit only the staged changes.
+- Use the Git menu for Fetch, Pull, Push, Sync, and Git Output.
+- Select a remote-tracking branch to compare committed HEAD with cached remote
+  state. This selection does not change the upstream used for pull or push.
+
+Commit, fetch, pull, push, and sync require a confirmation that shows the
+repository, destination, and exact commands. Stage and unstage are explicit file
+actions. All operations use short-lived, single-use previews tied to repository
+state. Changed content invalidates a preview.
+
+Pull and sync require a clean index and worktree. Updates are fast-forward-only.
+No force push, rebase, reset, discard, or pruning is exposed. Conflicts, an
+in-progress Git operation, or a missing remote upstream block unsafe actions.
+New branches without an upstream must be published outside the canvas.
+
+Refresh reads cached local state. Fetch contacts the upstream remote, or the
+first configured remote if no upstream exists. `FETCH_HEAD` timestamps are
+repository-level metadata and do not prove every remote ref is current.
+Partial sync failures report any successful pull. No automatic retry occurs.
+
+## Review tabs
 
 ### Diagram
 
@@ -67,7 +92,7 @@ or proof of test coverage.
 
 ## Filtering
 
-A single filter bar applies to **every** tab: a search box and **Added / Edited / Deleted /
+A single filter bar applies to the **three review tabs**: a search box and **Added / Edited / Deleted /
 Renamed** chips. The **High risk** chip is an *override* rather than another AND — it shows
 every flagged file regardless of the other filters, which grey out while it is on, so nothing
 risky can hide behind a filter you forgot was set.
@@ -82,6 +107,9 @@ Submitting prepares Markdown and attempts a clipboard copy. It does not post
 comments or reviews to GitHub.
 
 ## Auto-update
+
+Source Control refreshes every eight seconds while visible and Auto is enabled.
+Its snapshots use working-file content hashes and staged Git entries.
 
 GitSummit debounces filesystem events and checks HEAD and porcelain status.
 This fingerprint is not a content digest; use Refresh if another edit to an
@@ -112,16 +140,19 @@ Optional open input:
 | `set_base` | Change the comparison base, then refresh. |
 | `focus_file` | Switch to Changes, expand a file and scroll to it. |
 | `get_feedback` | Read the reviewer's comments back as markdown. |
+| `source_status` | Read local status and a remote-ref comparison without fetching or changing Git. |
 
 ## Keyboard shortcuts
 
-`1` Diagram · `2` Changes · `3` Commits · `/` filter · `r` refresh · `Esc` close the
-full-screen diff.
+`0` Source Control · `1` Diagram · `2` Changes · `3` Commits · `/` filter · `r` refresh.
+`Ctrl+Enter` previews a commit from the message box. Shortcuts do not intercept
+typing in inputs. Escape cancels a confirmation or closes the review diff.
+Use Left/Right arrows, Home, or End with a tab focused. All views share an aligned
+header and toolbar, retain their reading position, and respect reduced motion.
 
 ## Theme
 
-GitSummit ships its own palette (Graphite) rather than following the host theme, so it looks
-the same in every app theme.
+All four tabs use Source Control's dark palette rather than the host theme.
 
 ## Files
 
@@ -129,11 +160,15 @@ the same in every app theme.
 | --- | --- |
 | `extension.mjs` | Wiring: `joinSession`, the canvas, a per-instance loopback HTTP server, SSE, the repo watcher, and the agent actions. |
 | `git.mjs` | Repo-agnostic git introspection and unified-diff parsing. |
+| `source-control.mjs` | Status, remote comparisons, bounded diffs, and confirmed Git actions. |
+| `http-guard.mjs` | Loopback host, origin, and per-panel token checks. |
+| `source-control.test.mjs` | Integration tests with disposable local Git remotes. |
 | `analyze.mjs` | Turns a diff into summaries, links between changed files, and risk. |
-| `web/` | The interactive iframe UI (`index.html`, `styles.css`, `app.js`). |
+| `web/` | The review UI and Source Control scripts and styles. |
 
-The repository is the source of truth. The extension holds review comments in
-memory for the life of the canvas.
+The repository is the source of truth. Confirmed Git actions persist there.
+Review comments and bounded Git Output stay in memory. Unsubmitted message
+drafts reset with the panel.
 
 ## Privacy
 
@@ -142,17 +177,28 @@ from the workspace. It does not redact them. Comments and tool results can be
 returned to the host agent; host processing and clipboard synchronization have
 their own data policies.
 
-The HTTP server binds only to `127.0.0.1`, but this review-only version does not
-authenticate its endpoints. Do not forward the port or treat loopback as a
-sandbox. Use trusted repositories and local software.
+The HTTP server binds only to `127.0.0.1`. API requests require a per-panel token
+and reject cross-origin requests. Do not forward the port or treat loopback as
+a sandbox. Use trusted repositories and local software.
 
-There is no built-in upload client or remote Git operation. Configured Git
-helpers and the external-editor fallback are separate programs and can have
-their own behavior.
+Confirmed fetch, pull, push, and sync operations contact the configured Git
+remote. Push sends committed code and metadata. Git uses the current user's
+authentication, hooks, and signing settings. Git terminal prompts and Git
+Credential Manager interactivity are disabled. Other configured askpass or SSH
+helpers may still prompt. Failures and timeouts appear in the UI; inspect Git
+state before retrying. URL credentials are redacted, but
+source code and messages are not. Host tools and editors have separate policies.
 
 Use synthetic repositories for public demos. Never bundle work code, captured
 diffs, real logs, session state, or credentials with this extension. Inspect Git
 history and metadata as well as the current files before publication.
+
+## Validation
+
+Run `node --test source-control.test.mjs` from this extension directory.
+Tests use disposable local repositories and remotes. Set `GITSUMMIT_TEST_ROOT`
+to choose the fixture directory. The symlink test skips when Windows does not
+grant the required permission.
 
 ## Installing it elsewhere
 

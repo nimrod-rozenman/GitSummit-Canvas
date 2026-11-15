@@ -10,7 +10,7 @@
    ================================================================ */
 const state = {
     rundown: null,
-    tab: "diagram",
+    tab: "source",
     changesView: "triage",
     filter: "",
     kindOff: new Set(),
@@ -19,6 +19,10 @@ const state = {
     open: new Set(),
     full: new Set(),
     diffs: new Map(), // path|full -> parsed diff
+    diffGeneration: 0,
+    diffVersions: new Map(),
+    diffRequests: new Map(),
+    tabScroll: new Map(),
     comments: [],
     submitted: false,
     sheet: null,
@@ -34,7 +38,9 @@ const esc = (s) =>
     String(s ?? "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 
 // Four review-facing kinds, so R/C and M/T don't fragment the filter.
 const KINDS = ["added", "edited", "deleted", "renamed"];
@@ -125,9 +131,27 @@ function renderTopbar() {
         });
     $("tabCountChanges").textContent = n;
     $("tabCountCommits").textContent = state.rundown.commits.length;
+    moveInk();
 }
 
 /* ---------------- tabs ---------------- */
+function scrollNodes(name) {
+    const panel = $("panel-" + name);
+    return [panel, ...panel.querySelectorAll(".scroll, .stage, .card-diff, .sc-detail")];
+}
+function captureScroll(name) {
+    return new Map(scrollNodes(name).map((node) => [
+        node.id || "file:" + node.closest(".card")?.dataset.path,
+        { top: node.scrollTop, left: node.scrollLeft },
+    ]));
+}
+function restoreScroll(name, saved) {
+    if (!saved) return;
+    for (const node of scrollNodes(name)) {
+        const position = saved.get(node.id || "file:" + node.closest(".card")?.dataset.path);
+        if (position) { node.scrollTop = position.top; node.scrollLeft = position.left; }
+    }
+}
 function moveInk() {
     const btn = $("tabs").querySelector('.tab[aria-selected="true"]');
     const ink = $("tabInk");
@@ -136,24 +160,33 @@ function moveInk() {
     ink.style.width = btn.offsetWidth + "px";
 }
 function setTab(name) {
+    const previous = state.tab;
+    state.tabScroll.set(previous, captureScroll(previous));
     state.tab = name;
+    document.body.classList.toggle("source-active", name === "source");
+    $("reviewControls").inert = name === "source";
+    if (name === "source") window.sourceControl.refresh();
     $("tabs")
         .querySelectorAll(".tab")
-        .forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+        .forEach((b) => {
+            const selected = b.dataset.tab === name;
+            b.setAttribute("aria-selected", String(selected));
+            b.tabIndex = selected ? 0 : -1;
+        });
     document
         .querySelectorAll(".panel")
         .forEach((p) => p.classList.toggle("active", p.id === "panel-" + name));
     moveInk();
     renderTabTools();
     renderActiveTab();
+    restoreScroll(name, state.tabScroll.get(name));
+    if (previous === "source" && name !== "source") loadRundown();
 }
 
 function renderTabTools() {
     const host = $("tabtools");
-    if (state.tab !== "changes") {
-        host.innerHTML = "";
-        return;
-    }
+    host.classList.toggle("inactive", state.tab !== "changes");
+    host.inert = state.tab !== "changes";
     const inline = true;
     host.innerHTML =
         '<span class="seg" id="viewSeg">' +
@@ -194,6 +227,8 @@ function renderTabTools() {
 
 /** Re-render whatever tab is showing — used by the filter and by refresh. */
 function renderActiveTab() {
+    if (state.tab === "source") return;
+    if (!state.rundown?.isGitRepo) return;
     if (state.tab === "changes") renderCards();
     else if (state.tab === "diagram") drawDiagram();
     else renderCommits();
@@ -368,6 +403,8 @@ function diffBodyHtml(f, key) {
         })
         .join("");
     return (
+        (state.diffVersions.get(diffKey(f)) !== state.diffGeneration
+            ? '<span class="diff-refresh" role="status">Refreshing diff…</span>' : "") +
         body +
         (diff.truncated
             ? '<div class="diff-note">Diff truncated — this file is large. Open it in your editor for the full change.</div>'
@@ -380,7 +417,9 @@ const diffKey = (f) => f.path + (state.full.has(f.path) ? "|full" : "");
 /** Fetch a diff if we don't have it yet, then repaint just that diff body. */
 async function ensureDiff(f) {
     const key = diffKey(f);
-    if (state.diffs.has(key)) return;
+    const generation = state.diffGeneration;
+    if (state.diffVersions.get(key) === generation || state.diffRequests.get(key) === generation) return;
+    state.diffRequests.set(key, generation);
     try {
         const res = await fetch(
             "api/file?path=" +
@@ -388,18 +427,29 @@ async function ensureDiff(f) {
                 (state.full.has(f.path) ? "&full=1" : ""),
             { cache: "no-store" },
         );
-        state.diffs.set(key, await res.json());
+        const data = await res.json();
+        if (generation !== state.diffGeneration) return;
+        if (!res.ok) throw new Error(data.error || `Diff request failed (${res.status}).`);
+        state.diffs.set(key, data);
+        state.diffVersions.set(key, generation);
     } catch (e) {
+        if (generation !== state.diffGeneration) return;
         state.diffs.set(key, { error: "Could not load diff: " + String(e) });
+        state.diffVersions.set(key, generation);
+    } finally {
+        if (state.diffRequests.get(key) === generation) state.diffRequests.delete(key);
     }
     // Only repaint if this file is still on screen in the same mode.
     if (diffKey(f) !== key) return;
+    const scroll = captureScroll(state.tab);
     for (const host of document.querySelectorAll(
         '.card[data-path="' + CSS.escape(f.path) + '"] .card-diff, #sheet .sheet-body',
     )) {
+        if (host.closest("#sheet") && state.sheet !== f.path) continue;
         const body = host.querySelector(".diff-body");
         if (body) body.innerHTML = diffBodyHtml(f, host.closest("#sheet") ? "sheet" : "card");
     }
+    restoreScroll(state.tab, scroll);
 }
 
 function diffToolsHtml(f, key) {
@@ -1550,6 +1600,18 @@ function drawDiagram() {
 $("tabs")
     .querySelectorAll(".tab")
     .forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
+$("tabs").addEventListener("keydown", (event) => {
+    const current = event.target.closest('[role="tab"]');
+    if (!current || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const tabs = [...$("tabs").querySelectorAll('[role="tab"]')];
+    const index = tabs.indexOf(current);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+        : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    setTab(tabs[next].dataset.tab);
+    tabs[next].focus({ preventScroll: true });
+    tabs[next].scrollIntoView({ block: "nearest", inline: "nearest" });
+});
 $("filter").addEventListener("input", (e) => {
     state.filter = e.target.value;
     renderActiveTab();
@@ -1654,36 +1716,42 @@ async function openInEditor(path) {
 
 /* ---------------- data ---------------- */
 
+let rundownLoad = null;
+function loadRundown(options = {}) {
+    if (rundownLoad) return rundownLoad;
+    rundownLoad = fetchRundown(options).finally(() => { rundownLoad = null; });
+    return rundownLoad;
+}
+function reviewStatus(message, error = false) {
+    $("reviewStatus").textContent = message;
+    $("reviewStatus").classList.toggle("error", error);
+    $("reviewStatus").hidden = !message;
+}
 /** Load the rundown, keeping the view exactly where the reviewer left it. */
-async function loadRundown({ preserve = true } = {}) {
+async function fetchRundown({ preserve = true } = {}) {
     let data;
+    if (!state.rundown) reviewStatus("Loading repository review…");
     try {
         const res = await fetch("api/rundown", { cache: "no-store" });
         data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `Review request failed (${res.status}).`);
+        if (typeof data.isGitRepo !== "boolean") throw new Error("Invalid repository review response.");
     } catch (e) {
-        $("cards").innerHTML =
-            '<div class="empty"><div class="empty-inner"><div class="empty-emoji">⚠️</div>' +
-            "<div>Could not load the rundown.</div><div style=\"color:var(--muted);margin-top:6px\">" +
-            esc(String(e)) +
-            "</div></div></div>";
+        reviewStatus((state.rundown ? "Could not refresh. Previous review data remains visible. " : "Could not load the review. ") + String(e), true);
         return;
     }
 
-    const scroller = document.querySelector(".panel.active .scroll") || $("stage");
-    const top = scroller ? scroller.scrollTop : 0;
-    const left = scroller ? scroller.scrollLeft : 0;
+    const scroll = captureScroll(state.tab);
 
     state.rundown = data;
-    state.diffs.clear(); // the working tree moved; cached diffs are stale
+    state.diffGeneration++;
     _graphAll = null;
 
     if (!data.isGitRepo) {
-        $("cards").innerHTML =
-            '<div class="empty"><div class="empty-inner"><div class="empty-emoji">📁</div><div>' +
-            esc(data.warnings?.[0] ?? "Not a git repository.") +
-            "</div></div></div>";
+        reviewStatus(data.warnings?.[0] ?? "Not a git repository.");
         return;
     }
+    reviewStatus("");
 
     // Drop open/full state for files that no longer exist in the change.
     const live = new Set(files().map((f) => f.path));
@@ -1696,10 +1764,7 @@ async function loadRundown({ preserve = true } = {}) {
     renderTabTools();
     renderActiveTab();
 
-    if (preserve && scroller) {
-        scroller.scrollTop = top;
-        scroller.scrollLeft = left;
-    }
+    if (preserve) restoreScroll(state.tab, scroll);
     $("stamp").classList.remove("bump");
     void $("stamp").offsetWidth;
     $("stamp").classList.add("bump");
@@ -1718,7 +1783,8 @@ async function loadComments() {
 $("refreshBtn").addEventListener("click", () => {
     const b = $("refreshBtn");
     b.classList.add("spinning");
-    loadRundown().finally(() => setTimeout(() => b.classList.remove("spinning"), 400));
+    (state.tab === "source" ? window.sourceControl.refresh() : loadRundown())
+        .finally(() => setTimeout(() => b.classList.remove("spinning"), 400));
 });
 $("liveBtn").addEventListener("click", () => {
     state.auto = !state.auto;
@@ -1732,11 +1798,13 @@ document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") $("filter").blur();
         return;
     }
-    if (e.key === "1") setTab("diagram");
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input,textarea,select,dialog,[contenteditable=true]")) return;
+    if (e.key === "0") setTab("source");
+    else if (e.key === "1") setTab("diagram");
     else if (e.key === "2") setTab("changes");
     else if (e.key === "3") setTab("commits");
-    else if (e.key === "r") loadRundown();
-    else if (e.key === "Escape" && state.sheet) closeSheet();
+    else if (e.key === "r") state.tab === "source" ? window.sourceControl.refresh() : loadRundown();
+    else if (e.key === "Escape" && !$("sheet").hidden) closeSheet();
     else if (e.key === "/") {
         e.preventDefault();
         setTab("changes");
@@ -1752,7 +1820,7 @@ window.addEventListener("resize", () => {
 
 // Live updates pushed by the extension's repo watcher.
 try {
-    const es = new EventSource("events");
+    const es = new EventSource("events?token=" + encodeURIComponent(window.sourceControl.token));
     es.onmessage = (ev) => {
         let msg;
         try {
@@ -1761,7 +1829,10 @@ try {
             return;
         }
         if (msg.type === "refresh" || msg.type === "base") {
-            if (state.auto || msg.type === "base") loadRundown();
+            if (state.auto || msg.type === "base") {
+                if (state.tab === "source") window.sourceControl.refresh();
+                else loadRundown();
+            }
         } else if (msg.type === "focus" && msg.path) {
             loadRundown().then(() => {
                 if (files().some((f) => f.path === msg.path)) goToFile(msg.path);
@@ -1772,7 +1843,7 @@ try {
     /* SSE unavailable — Refresh still works */
 }
 
-setTab("diagram");
+setTab("source");
 loadComments();
 loadRundown({ preserve: false });
 requestAnimationFrame(moveInk);

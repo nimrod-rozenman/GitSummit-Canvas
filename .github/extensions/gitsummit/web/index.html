@@ -5,6 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>GitSummit</title>
         <link rel="stylesheet" href="styles.css" />
+        <link rel="stylesheet" href="source-control.css" />
     </head>
     <body>
         <div class="app">
@@ -34,12 +35,13 @@
                 <div class="chips" id="chips"></div>
             </header>
 
-            <nav class="tabs" id="tabs" role="tablist">
-                <button class="tab" role="tab" data-tab="diagram" aria-selected="true">Diagram</button>
-                <button class="tab" role="tab" data-tab="changes" aria-selected="false">
+            <nav class="tabs" id="tabs" role="tablist" aria-label="GitSummit views">
+                <button class="tab" id="tab-source" role="tab" data-tab="source" aria-controls="panel-source" aria-selected="true">Source Control</button>
+                <button class="tab" id="tab-diagram" role="tab" data-tab="diagram" aria-controls="panel-diagram" aria-selected="false" tabindex="-1">Diagram</button>
+                <button class="tab" id="tab-changes" role="tab" data-tab="changes" aria-controls="panel-changes" aria-selected="false" tabindex="-1">
                     Changes <span class="count" id="tabCountChanges">0</span>
                 </button>
-                <button class="tab" role="tab" data-tab="commits" aria-selected="false">
+                <button class="tab" id="tab-commits" role="tab" data-tab="commits" aria-controls="panel-commits" aria-selected="false" tabindex="-1">
                     Commits <span class="count" id="tabCountCommits">0</span>
                 </button>
                 <span class="tab-ink" id="tabInk"></span>
@@ -53,10 +55,12 @@
                 </button>
             </nav>
 
-            <div class="filterbar">
+            <div class="filterbar" id="viewToolbar">
+              <div class="review-controls" id="reviewControls">
                 <input
                     class="filter"
                     id="filter"
+                    aria-label="Filter changed files"
                     type="text"
                     placeholder="Filter files…  (/)"
                     autocomplete="off"
@@ -66,18 +70,61 @@
                 <span class="fcount" id="fcount"></span>
                 <span class="tool-spacer"></span>
                 <span class="tabtools" id="tabtools"></span>
+              </div>
+              <div class="source-toolbar">
+                  <strong>Local changes and remote comparison</strong>
+                  <span>Select a file below to inspect its diff.</span>
+              </div>
             </div>
 
             <main class="panels">
+                <div class="review-status" id="reviewStatus" role="status" aria-live="polite" hidden></div>
+                <section class="panel active" id="panel-source" role="tabpanel" aria-labelledby="tab-source">
+                    <div class="sc-layout">
+                        <aside class="sc-sidebar" aria-label="Repository changes">
+                            <div class="sc-section-heading"><span>Repositories</span><button id="sc-menu-button" class="sc-icon" aria-label="Git operations" aria-expanded="false">&#8943;</button></div>
+                            <div id="sc-menu" class="sc-menu" hidden>
+                                <button data-op="fetch">Fetch...</button>
+                                <button data-op="pull">Pull (fast-forward only)...</button>
+                                <button data-op="push">Push...</button>
+                                <button data-op="sync">Sync changes...</button>
+                                <hr />
+                                <button id="sc-output-button">Show Git Output</button>
+                            </div>
+                            <div id="sc-repository" class="sc-repository">Loading repository...</div>
+                            <div id="sc-path" class="sc-path"></div>
+                            <div id="sc-upstream" class="sc-note"></div>
+                            <div class="sc-compose">
+                                <label class="sc-sr-only" for="sc-message">Commit message</label>
+                                <textarea id="sc-message" placeholder="Message (Ctrl+Enter to commit staged changes)" rows="2" maxlength="16000"></textarea>
+                                <button id="sc-commit" class="sc-primary" disabled>Commit staged changes</button>
+                                <button id="sc-sync" class="sc-secondary" disabled>Sync changes</button>
+                            </div>
+                            <div id="sc-notice" class="sc-notice" role="status" aria-live="polite"></div>
+                            <div id="sc-files"></div>
+                            <div class="sc-section-heading sc-remote-heading">Remote comparison</div>
+                            <label class="sc-sr-only" for="sc-compare">Compare HEAD with remote branch</label>
+                            <select id="sc-compare" aria-label="Compare HEAD with remote branch"></select>
+                            <div id="sc-freshness" class="sc-note"></div>
+                            <div id="sc-remote"></div>
+                        </aside>
+                        <section class="sc-detail" id="sourceDetail" aria-label="Selected change">
+                            <div id="sc-detail-title" class="sc-detail-title">Working tree &amp; remote</div>
+                            <div id="sc-detail-content" class="sc-detail-content">
+                                <div class="sc-welcome"><h2>Your changes, in context</h2><p>Select a file to inspect its diff.<br />Fetch to update your view of the remote.</p></div>
+                            </div>
+                        </section>
+                    </div>
+                </section>
                 <!-- ---------------- Changes ---------------- -->
-                <section class="panel active" id="panel-changes" role="tabpanel">
+                <section class="panel" id="panel-changes" role="tabpanel" aria-labelledby="tab-changes">
                     <div class="scroll" id="changesScroll">
                         <div class="cards" id="cards"></div>
                     </div>
                 </section>
 
                 <!-- ---------------- Diagram ---------------- -->
-                <section class="panel" id="panel-diagram" role="tabpanel">
+                <section class="panel" id="panel-diagram" role="tabpanel" aria-labelledby="tab-diagram">
                     <div class="dbar">
                         <div class="legend links" id="legend">
                             <span class="lg"><i style="background: var(--st-A)"></i>Added</span>
@@ -96,8 +143,8 @@
                 </section>
 
                 <!-- ---------------- Commits ---------------- -->
-                <section class="panel" id="panel-commits" role="tabpanel">
-                    <div class="scroll">
+                <section class="panel" id="panel-commits" role="tabpanel" aria-labelledby="tab-commits">
+                    <div class="scroll" id="commitsScroll">
                         <h2 class="section-title">The story of this branch</h2>
                         <div class="tl" id="timeline"></div>
                         <h2 class="section-title">Where the changes are</h2>
@@ -108,6 +155,7 @@
         </div>
         <div class="sheet" id="sheet" hidden></div>
 
+        <script src="source-control.js"></script>
         <script src="app.js"></script>
     </body>
 </html>
