@@ -1,20 +1,14 @@
 <div align="center">
 
-<img src="docs/screenshots/logo.png" alt="GitSummit" width="88" />
-
 # GitSummit
 
 ### The last look before the pull request.
 
-**A Copilot CLI canvas that turns "the agent changed 23 files" into a change you can actually read** — grouped by how the files depend on each other, ranked by what looks most likely to break, with review comments you hand straight back to the agent.
+**A repository-independent review canvas for a canvas-capable GitHub Copilot host.**
+Inspect changed files, follow inferred dependencies, and give the agent review feedback.
 
-[![Copilot CLI Canvas](https://img.shields.io/badge/Copilot%20CLI-Canvas%20Extension-8957e5?style=flat-square)](https://github.com/nimrod-rozenman/GitSummit-Canvas)
-[![Repo agnostic](https://img.shields.io/badge/repo-agnostic-2ea043?style=flat-square)](#-how-the-comparison-base-is-chosen)
-[![Zero dependencies](https://img.shields.io/badge/runtime%20deps-0-1f6feb?style=flat-square)](#-architecture)
-[![Runs locally](https://img.shields.io/badge/network-127.0.0.1%20only-d29922?style=flat-square)](#-what-it-never-does)
-[![Node](https://img.shields.io/badge/node-%E2%89%A520-333?style=flat-square&logo=nodedotjs&logoColor=white)](#-requirements)
-
-<img src="docs/screenshots/hero-diagram.png" alt="GitSummit dependency diagram — changed files grouped into layers, arrows running from dependencies down into the files that use them" width="880" />
+This is a community extension, not an official host feature or an endorsement by
+the host's vendor.
 
 </div>
 
@@ -28,45 +22,58 @@ An agent finishes a task and hands you a diff. `git diff` shows you *lines*. A P
 
 GitSummit answers exactly that — in the gap between *"agent is done"* and *"PR is open"*.
 
-It is **repo-agnostic**: it inspects whatever workspace the Copilot session is running in, entirely through `git`. No language server, no network calls, no per-project configuration, nothing to set up.
+It inspects the active session's Git workspace. Its analysis uses local Git output
+and file contents rather than a language server or a project-specific service.
+The version in this repository provides review views; it does not provide
+stage, commit, fetch, pull, or push controls.
 
 ---
 
 ## ⚡ Quick start
 
-**1. Install the extension** — point the app's extension installer at this folder:
+**1. Open the GitHub Copilot app. Select Customize in the sidebar.**
 
-```
+![Customize selected in the GitHub Copilot sidebar](docs/screenshots/github-copilot-customize.png)
+
+**2. Select Add → Canvas from URL…**
+
+![The Add menu with Canvas from URL highlighted](docs/screenshots/github-copilot-add-canvas.png)
+
+**3. Paste this URL:**
+
+```text
 https://github.com/nimrod-rozenman/GitSummit-Canvas/tree/main/.github/extensions/gitsummit
 ```
 
-<details>
-<summary><b>…or install it by hand</b></summary>
+Complete the installation prompts. Choose **User** scope if asked.
 
-Copy `.github/extensions/gitsummit/` into either:
+**4. Open a project session. Send this message:**
+
+```text
+Open GitSummit
+```
+
+GitSummit opens beside the chat and shows your project's changes.
+If the project has no changes, there is nothing to review yet.
+You only install once. In another project session, ask **Open GitSummit** again.
+
+No terminal commands or build step are required.
+If the repository is private, your GitHub account needs access.
+
+<details>
+<summary>Manual installation</summary>
+
+Copy the `.github/extensions/gitsummit/` folder from this repository to one of these locations:
 
 | Scope | Path |
 | --- | --- |
 | **User** (every project) | `~/.copilot/extensions/gitsummit/` |
-| **Project** (this repo only) | `<repo>/.github/extensions/gitsummit/` |
+| **Project** (one project) | `<your-project>/.github/extensions/gitsummit/` |
 
-Then reload extensions — or just restart the session.
+Restart the session. Then ask **Open GitSummit**.
+The host must support canvas extensions.
 
 </details>
-
-**2. Let an agent make some changes.**
-
-**3. Ask for it:**
-
-```
-open GitSummit
-```
-
-That's it. No install step, no build step, no config file. The canvas opens beside the chat, reads the repository, and renders.
-
-<div align="center">
-<img src="docs/screenshots/quickstart.gif" alt="Opening GitSummit next to a Copilot CLI session and browsing a change" width="880" />
-</div>
 
 ---
 
@@ -100,8 +107,6 @@ That's it. No install step, no build step, no config file. The canvas opens besi
 
 ### 🕸️ Diagram — the shape of the change
 
-<img src="docs/screenshots/tab-diagram.png" alt="Diagram tab" width="100%" />
-
 A top-to-bottom flow. Changed files are grouped into **layers** by how they depend on each other: the top layer depends on nothing else in the change, each layer below uses the one above it, and files with no links land in **Standalone**. Layers are named after the file the rest of the layer leans on — `Data access` → `Core logic` → `Tests`.
 
 Every card carries the filename, its directory, line counts, `↑used-by` / `↓uses` degrees and a one-line description.
@@ -116,8 +121,6 @@ Every card carries the filename, its directory, line counts, `↑used-by` / `↓
 
 ### 📄 Changes — file by file
 
-<img src="docs/screenshots/tab-changes.png" alt="Changes tab" width="100%" />
-
 Each changed file is a card: status, name, risk, directory, counts, a 1–3 sentence summary, signal chips (`+ createRateLimiter`, `− resetWindow`, `+ ioredis`) and the plain-language reasons behind its risk score.
 
 Three groupings, one click apart:
@@ -126,11 +129,11 @@ Three groupings, one click apart:
 - **List** — flat, ordered by churn
 - **Layers** — the Diagram's ordering, so you read the change in the order it was built
 
-Expand a card and you get a toolbar: **Changed hunks / Whole file** · **⤢ Full screen** · **↗ Open file** (launches your editor) · **＋ Comment**.
+Expand a card for **Changed hunks / Whole file**, **Full screen**, **Open file**,
+and **Comment**. Open file first requests the host's editor canvas. If that is
+unavailable, it can fall back to an installed editor or the system file handler.
 
 ### 📜 Commits — where the work went
-
-<img src="docs/screenshots/tab-commits.png" alt="Commits tab" width="100%" />
 
 The branch's commit narrative, plus a directory rollup showing where the change is concentrated. Click a directory to filter **Changes** down to it.
 
@@ -142,13 +145,13 @@ Every file gets **Risk: none / small / medium / high**. It is a *heuristic*, so 
 
 | Signal | Why it counts |
 | :-- | :-- |
-| 🗑️ the whole file is removed | anything still importing it breaks |
-| ✂️ removes declarations | callers lose an API they were using |
+| 🗑️ the whole file is removed | remaining imports may need changes |
+| ✂️ removes declarations | callers may depend on the removed API |
 | 🔗 N changed files depend on it | blast radius *inside this very change* |
 | 📦 moved / renamed | every import pointing at it must change |
 | 📈 large change, many deletions | more surface area to get wrong |
 | ⚙️ dependency manifest or CI edit | breaks the **build**, not just the code |
-| 🧪 no test in this change covers it | nothing proves it still works |
+| 🧪 no changed test is linked to it | the heuristic found no related test in this change |
 
 The header shows the change-wide risk: the worst file, nudged up for each additional notable one.
 
@@ -168,7 +171,9 @@ The **High risk** chip is deliberately *not* another `AND`. It is an **override*
 
 Comment on a whole file, or on any individual line in a diff. Comments live in the canvas for the length of the review — **nothing is written into your repository**.
 
-Hit **Submit comments** (top right) and they're rendered as markdown, grouped by file. The agent reads them back through the `get_feedback` action, so the whole loop is:
+**Submit comments** prepares Markdown grouped by file and attempts to copy it to
+the clipboard. The agent can read comments with `get_feedback`. This does not
+post a review or comment to GitHub. The feedback flow is:
 
 ```mermaid
 flowchart LR
@@ -187,11 +192,17 @@ After submitting, you literally just say:
 
 ## 🔄 Auto-update that doesn't fight your editor
 
-GitSummit watches the repository and recomputes **only when it actually changed**.
+GitSummit watches the repository and recomputes when its Git fingerprint changes.
 
-Filesystem events are debounced (400 ms) and then checked against a cheap fingerprint of the working tree — so editor temp files, save churn and git's own index rewrites never trigger a redraw. Refreshing **keeps your place**: same tab, same expanded files, same scroll position.
+Filesystem events are debounced for 400 ms. A fingerprint of HEAD and porcelain
+status reduces redundant updates. It is not a content digest: another edit to an
+already-modified file may require **Refresh**. Refreshing preserves the selected
+tab, expanded files, and scroll position.
 
-Recursive `fs.watch` where it's supported, automatic fallback to a 4-second fingerprint poll where it isn't. Watching only runs while somebody is actually looking. The **Auto** toggle turns it all off.
+The extension uses recursive `fs.watch` where supported, with a four-second poll
+as a fallback. Watching runs while a canvas event-stream client is connected.
+The **Auto** toggle pauses automatic UI refresh; it does not stop the server's
+watcher.
 
 ---
 
@@ -245,7 +256,7 @@ flowchart TB
         AGENT["Agent — open_canvas, actions"]
     end
 
-    subgraph ext["extension.mjs — Node, in-process"]
+    subgraph ext["extension.mjs — separate Node process"]
         SRV["Loopback HTTP server<br/>127.0.0.1, random port"]
         SSE["SSE stream — /events"]
         WATCH["Repo watcher<br/>debounce + fingerprint"]
@@ -270,25 +281,48 @@ flowchart TB
     SRV -->|get_feedback| AGENT
 ```
 
-| File | Lines | Purpose |
-| --- | --: | --- |
-| [`extension.mjs`](.github/extensions/gitsummit/extension.mjs) | 485 | Wiring: `joinSession`, the canvas, a per-instance loopback HTTP server, SSE, the repo watcher, the agent actions |
-| [`git.mjs`](.github/extensions/gitsummit/git.mjs) | 511 | Repo-agnostic git introspection and unified-diff parsing |
-| [`analyze.mjs`](.github/extensions/gitsummit/analyze.mjs) | 529 | Turns a diff into summaries, links between changed files, and risk |
-| [`web/app.js`](.github/extensions/gitsummit/web/app.js) | 1,624 | The interactive UI |
-| [`web/styles.css`](.github/extensions/gitsummit/web/styles.css) | 1,816 | The **Graphite** palette |
-| [`web/index.html`](.github/extensions/gitsummit/web/index.html) | 107 | Shell |
+| File | Purpose |
+| --- | --- |
+| [`extension.mjs`](.github/extensions/gitsummit/extension.mjs) | Canvas registration, loopback HTTP server, event stream, watcher, and agent actions |
+| [`git.mjs`](.github/extensions/gitsummit/git.mjs) | Git introspection and unified-diff parsing |
+| [`analyze.mjs`](.github/extensions/gitsummit/analyze.mjs) | Heuristic summaries, links, and risk |
+| [`web/app.js`](.github/extensions/gitsummit/web/app.js) | Interactive review UI |
+| [`web/styles.css`](.github/extensions/gitsummit/web/styles.css) | Graphite palette and layout |
+| [`web/index.html`](.github/extensions/gitsummit/web/index.html) | Canvas document |
 
-**~5,000 lines. Zero runtime dependencies. No build step.** Everything is derived from `git` output alone — which is what keeps it repo-agnostic, and also why nothing is presented as fact: summaries are descriptive, and every risk point carries its own reason.
+The extension uses Node built-ins and the host-provided Copilot SDK. No build step
+is required. Its dependency links and risk scores are text-based heuristics,
+not a resolved code graph, a security audit, or evidence that tests passed.
 
 ---
 
-## 🔒 What it never does
+## 🔒 Privacy and data flow
 
-- ❌ **Never writes to your repository.** Review comments live in memory for the life of the canvas and disappear with it.
-- ❌ **Never talks to the network.** The HTTP server binds to `127.0.0.1` on a random port, one instance per canvas.
-- ❌ **Never becomes a file launcher.** `↗ Open file` only opens paths that are part of the current change.
-- ❌ **Never keeps durable state.** The repository is the source of truth; the rundown is recomputed on open, on refresh, and on repo change.
+- **Runtime repository data is sensitive.** The canvas reads paths, diffs, file
+  contents, commit messages, and author names from the workspace it reviews.
+  It does not automatically redact them.
+- **Review data is local to the extension process.** The UI uses a per-instance
+  HTTP server bound to `127.0.0.1`. Review comments are held in memory and can be
+  returned to the host agent or copied to the clipboard.
+- **Loopback is not a security boundary.** This review-only version does not
+  authenticate its local HTTP endpoints. Do not expose or forward its port.
+  Use it only with repositories and local software you trust.
+- **No upload or remote Git operation is built into this version.** Host
+  processing, clipboard synchronization, editors, and configured Git helpers
+  have their own behavior and policies. Local analysis is not a guarantee that
+  information returned to the host stays on this computer.
+- **No commit or source-edit action is exposed.** Comments are not saved in the
+  repository. Open file can launch an editor; changes made there are separate
+  user actions.
+
+Do not publish screenshots, logs, review exports, or recordings from a work or
+customer repository. Use a synthetic example and follow the
+[screenshot guidance](docs/screenshots/README.md).
+
+Before making a fork or release public, inspect all branches, tags, historical
+blobs, commit attribution, commit trailers, and hosted assets. Removing a value
+from the latest file does not remove it from Git history. Confirm that you have
+the right to publish the code; a content scan cannot establish ownership.
 
 ---
 
@@ -302,10 +336,16 @@ GitSummit ships its own palette — **Graphite** — rather than inheriting the 
 
 | | |
 | --- | --- |
-| **Copilot CLI** | with canvas extension support |
-| **Node** | ≥ 20 *(recursive `fs.watch`; older versions fall back to polling)* |
+| **Host** | a GitHub Copilot host with canvas extension support |
+| **Node** | 20 or later |
 | **git** | on `PATH` |
 | **OS** | Windows · macOS · Linux |
+
+## License
+
+No license has been selected for this repository. Public visibility alone does
+not grant permission to reuse or redistribute its code. The owner must confirm
+publication rights and select a license before presenting it as open source.
 
 ---
 

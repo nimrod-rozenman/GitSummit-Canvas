@@ -1,11 +1,16 @@
 # GitSummit
 
-A **repo-agnostic** Copilot CLI **canvas** for the pre-PR phase. After a coding agent
+A **repo-agnostic review canvas** for a canvas-capable GitHub Copilot host. After a coding agent
 finishes making changes, open **GitSummit** to see what changed, how the changed files
 depend on each other, and what looks most likely to break — before you open a pull request.
 
 It works in any repository: it inspects whatever workspace the session is running in via
 `git`, so nothing here is specific to one project.
+
+This repository version provides the three review tabs below. It does not
+include Git staging, commit, fetch, pull, or push controls. It uses the
+host-provided `@github/copilot-sdk` and Node built-ins; no build or separate
+dependency installation is required.
 
 ## The three tabs
 
@@ -33,7 +38,8 @@ risk. Three groupings:
 - **Layers** — the same layers as the Diagram, so you read the change in the order it was built.
 
 Expanding a card gives you a toolbar: **Changed hunks / Whole file**, **⤢ Full screen**,
-**↗ Open file** (launches your editor) and **＋ Comment**.
+**↗ Open file** and **＋ Comment**. Open file first requests the host's editor
+canvas, then falls back to an installed editor or system file handler if needed.
 
 ### Commits
 
@@ -47,15 +53,17 @@ presented as a verdict: every point carries a plain-language reason, shown on th
 
 | Signal | Why it counts |
 | --- | --- |
-| the whole file is removed | anything still importing it breaks |
-| removes declarations | callers lose an API they were using |
+| the whole file is removed | remaining imports may need changes |
+| removes declarations | callers may depend on the removed API |
 | N changed files depend on it | blast radius inside this very change |
 | moved / renamed | imports pointing at it must change |
 | large change, many deletions | more surface to get wrong |
 | dependency manifest or CI edit | breaks the build rather than the code |
-| no test in this change covers it | nothing proves it still works |
+| no changed test is linked to it | no related test was found by the heuristic |
 
 The header shows the change-wide risk: the worst file, nudged up for each other notable one.
+These are text-based review hints, not a security audit, a resolved code graph,
+or proof of test coverage.
 
 ## Filtering
 
@@ -70,13 +78,16 @@ Comment on a whole file, or on any line in a diff. Comments live in the canvas f
 of the review; **nothing is written into your repository**. **Submit comments** (top right)
 opens them as markdown, and the agent reads them back with the `get_feedback` action — so
 after submitting you can just say *"act on my GitSummit feedback"*.
+Submitting prepares Markdown and attempts a clipboard copy. It does not post
+comments or reviews to GitHub.
 
 ## Auto-update
 
-GitSummit watches the repository and recomputes when it actually changes. Filesystem events
-are debounced and checked against a cheap fingerprint of the working tree, so editor noise
-and git's own index churn don't cause redraws. Refreshing keeps your place: same tab, same
-expanded files, same scroll position. The **Auto** toggle turns it off.
+GitSummit debounces filesystem events and checks HEAD and porcelain status.
+This fingerprint is not a content digest; use Refresh if another edit to an
+already-modified file does not appear. Refreshing preserves the selected tab,
+expanded files, and scroll position. Auto pauses UI refresh, not the server's
+watcher. A four-second poll is used when recursive watching is unavailable.
 
 ## How the comparison base is chosen
 
@@ -121,14 +132,36 @@ the same in every app theme.
 | `analyze.mjs` | Turns a diff into summaries, links between changed files, and risk. |
 | `web/` | The interactive iframe UI (`index.html`, `styles.css`, `app.js`). |
 
-Apart from review comments (held in memory for the life of the canvas), no durable state is
-kept: the repository is the source of truth and the rundown is recomputed on open, refresh
-and repo change.
+The repository is the source of truth. The extension holds review comments in
+memory for the life of the canvas.
+
+## Privacy
+
+The canvas displays real paths, source code, commit messages, and author names
+from the workspace. It does not redact them. Comments and tool results can be
+returned to the host agent; host processing and clipboard synchronization have
+their own data policies.
+
+The HTTP server binds only to `127.0.0.1`, but this review-only version does not
+authenticate its endpoints. Do not forward the port or treat loopback as a
+sandbox. Use trusted repositories and local software.
+
+There is no built-in upload client or remote Git operation. Configured Git
+helpers and the external-editor fallback are separate programs and can have
+their own behavior.
+
+Use synthetic repositories for public demos. Never bundle work code, captured
+diffs, real logs, session state, or credentials with this extension. Inspect Git
+history and metadata as well as the current files before publication.
 
 ## Installing it elsewhere
 
 Point the app's extension installer at this folder:
 
 ```
-https://github.com/nimrod-rozenman/rundown-canvas/tree/main/.github/extensions/gitsummit
+https://github.com/nimrod-rozenman/GitSummit-Canvas/tree/main/.github/extensions/gitsummit
 ```
+
+This is a community extension. References to the host and public tools describe
+compatibility, not vendor affiliation. No license has been selected; publication
+rights and licensing require the owner's decision.
