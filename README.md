@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/logo.svg" alt="GitSummit mountain logo" width="88" height="88" />
+
 # GitSummit
 
 ### The last look before the pull request.
@@ -11,21 +13,6 @@ This is a community extension, not an official host feature or an endorsement by
 the host's vendor.
 
 </div>
-
----
-
-## 🧭 The problem
-
-An agent finishes a task and hands you a diff. `git diff` shows you *lines*. A PR view shows you *files, alphabetically*. Neither tells you the thing you actually need before you press **Create pull request**:
-
-> **What did this change actually touch, in what order does it make sense to read it, and which file is going to bite me?**
-
-GitSummit answers exactly that — in the gap between *"agent is done"* and *"PR is open"*.
-
-It inspects the active session's Git workspace. Its analysis uses local Git output
-and file contents rather than a language server or a project-specific service.
-The version in this repository provides review views; it does not provide
-stage, commit, fetch, pull, or push controls.
 
 ---
 
@@ -77,7 +64,26 @@ The host must support canvas extensions.
 
 ---
 
+## 🧭 The problem
+
+An agent finishes a task and hands you a diff. `git diff` shows you *lines*. A PR view shows you *files, alphabetically*. Neither tells you the thing you actually need before you press **Create pull request**:
+
+> **What did this change actually touch, in what order does it make sense to read it, and which file is going to bite me?**
+
+GitSummit answers exactly that — in the gap between *"agent is done"* and *"PR is open"*.
+
+It inspects the active session's Git workspace. Its analysis uses local Git output
+and file contents rather than a language server or a project-specific service.
+The version in this repository provides review views; it does not provide
+stage, commit, fetch, pull, or push controls.
+
+---
+
 ## 🗺️ The three tabs
+
+The screenshots below use a synthetic `example-catalog` repository.
+All code, names, and commits are demonstration data. These are canvas-only
+captures, without account details or the host app's sidebar.
 
 <table>
 <tr>
@@ -107,6 +113,8 @@ The host must support canvas extensions.
 
 ### 🕸️ Diagram — the shape of the change
 
+![GitSummit diagram showing dependencies in a synthetic catalog project](docs/screenshots/tab-diagram.png)
+
 A top-to-bottom flow. Changed files are grouped into **layers** by how they depend on each other: the top layer depends on nothing else in the change, each layer below uses the one above it, and files with no links land in **Standalone**. Layers are named after the file the rest of the layer leans on — `Data access` → `Core logic` → `Tests`.
 
 Every card carries the filename, its directory, line counts, `↑used-by` / `↓uses` degrees and a one-line description.
@@ -121,6 +129,8 @@ Every card carries the filename, its directory, line counts, `↑used-by` / `↓
 
 ### 📄 Changes — file by file
 
+![GitSummit file summary and diff for synthetic catalog search code](docs/screenshots/tab-changes.png)
+
 Each changed file is a card: status, name, risk, directory, counts, a 1–3 sentence summary, signal chips (`+ createRateLimiter`, `− resetWindow`, `+ ioredis`) and the plain-language reasons behind its risk score.
 
 Three groupings, one click apart:
@@ -134,6 +144,8 @@ and **Comment**. Open file first requests the host's editor canvas. If that is
 unavailable, it can fall back to an installed editor or the system file handler.
 
 ### 📜 Commits — where the work went
+
+![GitSummit commit timeline and directory summary using demonstration data](docs/screenshots/tab-commits.png)
 
 The branch's commit narrative, plus a directory rollup showing where the change is concentrated. Click a directory to filter **Changes** down to it.
 
