@@ -105,20 +105,29 @@ All tabs use the same dark palette.
 - **Stage and unstage:** use the file buttons. Unstage preserves working files.
 - **Commit:** enter a message and confirm the staged changes. Unstaged edits stay separate.
 - **Fetch, pull, push, or sync:** use the Git menu and review the confirmation.
+- **Sync from origin's default branch:** fetch and fast-forward into the current
+  local branch only. Sync never pushes or changes the branch's upstream.
+  A green border marks incoming commits from the default branch.
 - **Compare:** select a remote-tracking branch to see incoming and outgoing
   commits and differences between its committed tree and local HEAD.
 
 Remote comparisons use cached refs. Refresh does not fetch. The displayed
 `FETCH_HEAD` time describes the repository, not the freshness of every remote.
 Fetch contacts the upstream remote, or the first configured remote if no upstream
-exists. Changing the comparison selector does not redirect pull or push.
+exists. Changing the comparison selector does not redirect sync, pull, or push.
+Sync always targets origin's default branch from the local `origin/HEAD` ref.
+When that ref is absent, an existing `origin/main` is the fallback. An unknown or
+missing default disables sync rather than selecting another remote or upstream.
+Fetch origin and check `origin/HEAD` if its cached default is unavailable or stale.
 
 Git actions use short-lived, single-use previews bound to repository state.
 Changed content requires a new preview. Pull and sync require a clean worktree
 and use fast-forward-only updates. No force push, rebase, reset, discard, or
-pruning is exposed. Missing upstreams, conflicts, and in-progress Git operations
-disable actions that cannot safely proceed. A failed sync reports any completed
-pull rather than silently retrying.
+pruning is exposed. Sync does not need a feature-branch upstream; the separate
+Pull and Push actions still require one. The green border remains visible for
+incoming commits when a dirty tree or divergence blocks sync; its tooltip explains
+the blocker. A failed fast-forward may leave remote-tracking refs updated.
+Sync does not retry automatically.
 
 ### 🕸️ Diagram — the shape of the change
 

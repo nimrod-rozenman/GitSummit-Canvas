@@ -22,11 +22,11 @@ async function configure(root) {
     await g(root, "config", "core.autocrlf", "false");
     await g(root, "config", "core.hooksPath", path.join(root, ".test-hooks"));
 }
-async function fixture({ commit = true, remote = false } = {}) {
+async function fixture({ commit = true, remote = false, defaultBranch = "main" } = {}) {
     const dir = await mkdtemp(path.join(testRoot, "case-"));
     const local = path.join(dir, "local");
     await mkdir(local);
-    await g(local, "init", "-b", "main");
+    await g(local, "init", "-b", defaultBranch);
     await configure(local);
     if (commit) {
         await writeFile(path.join(local, "file.txt"), "first\n");
@@ -36,9 +36,9 @@ async function fixture({ commit = true, remote = false } = {}) {
     const control = new SourceControl(local);
     if (!remote) return { dir, local, control };
     const bare = path.join(dir, "remote.git"), peer = path.join(dir, "peer");
-    await g(dir, "init", "--bare", "--initial-branch=main", bare);
+    await g(dir, "init", "--bare", `--initial-branch=${defaultBranch}`, bare);
     await g(local, "remote", "add", "origin", bare);
-    await g(local, "push", "-u", "origin", "main");
+    await g(local, "push", "-u", "origin", defaultBranch);
     await g(dir, "clone", "-c", "core.autocrlf=false", bare, peer);
     await configure(peer);
     return { dir, local, control, bare, peer };
@@ -205,11 +205,15 @@ test("pull fast-forwards clean local branch and push publishes only the configur
     assert.equal(await g(f.dir, "--git-dir", f.bare, "rev-parse", "refs/heads/main"), await g(f.local, "rev-parse", "HEAD"));
 });
 
-test("sync fast-forwards and then pushes; does not merge divergent histories", async () => {
+test("sync fast-forwards from origin/main without pushing; does not merge divergent histories", async () => {
     const f = await fixture({ remote: true });
     await publishPeer(f, "sync.txt");
-    assert.deepEqual((await action(f.control, "sync")).completed, ["pull", "push"]);
+    assert.deepEqual((await action(f.control, "sync")).completed, ["pull"]);
+    const remoteBefore = await g(f.dir, "--git-dir", f.bare, "rev-parse", "refs/heads/main");
     await commitFile(f.local, "local.txt");
+    await action(f.control, "sync");
+    assert.equal(await g(f.dir, "--git-dir", f.bare, "rev-parse", "refs/heads/main"), remoteBefore);
+    assert.equal((await f.control.status()).syncTarget.ahead, 1);
     await publishPeer(f, "peer.txt");
     await action(f.control, "fetch", { remote: "origin" });
     const state = await f.control.status();
@@ -219,16 +223,133 @@ test("sync fast-forwards and then pushes; does not merge divergent histories", a
     await assert.rejects(action(f.control, "push"), /failed/);
 });
 
-test("partial sync failure reports completed pull and preserves the fetched commit", async () => {
+test("sync never contacts the push URL", async () => {
     const f = await fixture({ remote: true });
     await publishPeer(f, "kept.txt");
     await g(f.local, "config", "remote.origin.pushurl", path.join(f.dir, "missing.git"));
-    await assert.rejects(action(f.control, "sync"), /Completed: pull/);
+    assert.deepEqual((await action(f.control, "sync")).completed, ["pull"]);
     assert.equal(await readFile(path.join(f.local, "kept.txt"), "utf8"), "kept.txt");
-    assert.equal(f.control.output.at(-1).success, false);
+    assert.equal(f.control.output.at(-1).success, true);
+    assert.equal(f.control.output.some((entry) => entry.command === "push"), false);
 });
 
-test("fetch and pull do not prune refs or local tags even when Git configuration enables pruning", async () => {
+test("sync compares against origin default, independently of upstream and selected comparison", async () => {
+    const f = await fixture({ remote: true });
+    await g(f.local, "checkout", "-b", "feature");
+    await g(f.local, "push", "-u", "origin", "feature");
+    const featureBefore = await g(f.dir, "--git-dir", f.bare, "rev-parse", "refs/heads/feature");
+    await publishPeer(f, "main-change.txt");
+    await action(f.control, "fetch", { remote: "origin" });
+    await g(f.local, "update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD");
+    const state = await f.control.status("origin/feature");
+    assert.equal(state.comparison.ref, "origin/feature");
+    assert.equal(state.behind, 0);
+    assert.equal(state.syncTarget.ref, "origin/main");
+    assert.equal(state.syncTarget.source, "origin/main fallback");
+    assert.equal(state.syncTarget.behind, 1);
+    const preview = await f.control.prepare({ operation: "sync", revision: state.revision });
+    assert.match(preview.title, /Sync from origin\/main/);
+    assert.match(preview.commands[0], /"origin" "refs\/heads\/main"$/);
+    assert.equal(preview.commands.some((command) => /"push"/.test(command)), false);
+    await f.control.execute({ token: preview.token, confirmed: true });
+    assert.equal(await readFile(path.join(f.local, "main-change.txt"), "utf8"), "main-change.txt");
+    assert.equal(await g(f.local, "rev-parse", "--abbrev-ref", "@{upstream}"), "origin/feature");
+    assert.equal(await g(f.dir, "--git-dir", f.bare, "rev-parse", "refs/heads/feature"), featureBefore);
+    assert.equal((await f.control.status()).syncTarget.behind, 0);
+    await action(f.control, "push");
+    assert.equal(await g(f.dir, "--git-dir", f.bare, "rev-parse", "refs/heads/feature"), await g(f.local, "rev-parse", "HEAD"));
+});
+
+test("sync uses origin/HEAD for a non-main default and works without a feature upstream", async () => {
+    const f = await fixture({ remote: true, defaultBranch: "trunk" });
+    await g(f.local, "remote", "set-head", "origin", "-a");
+    await g(f.local, "checkout", "-b", "local-feature");
+    await publishPeer(f, "trunk-change.txt");
+    await action(f.control, "fetch", { remote: "origin" });
+    const state = await f.control.status();
+    assert.equal(state.upstream, null);
+    assert.equal(state.syncTarget.ref, "origin/trunk");
+    assert.equal(state.syncTarget.source, "origin/HEAD");
+    assert.equal(state.syncTarget.behind, 1);
+    assert.deepEqual((await action(f.control, "sync")).completed, ["pull"]);
+    assert.equal(await g(f.local, "branch", "--show-current"), "local-feature");
+    assert.equal((await f.control.status()).upstream, null);
+});
+
+test("missing default and dangling origin/HEAD never fall back to another remote or upstream", async () => {
+    const f = await fixture({ remote: true, defaultBranch: "trunk" });
+    await assert.rejects(action(f.control, "sync"), /default branch is unavailable/);
+    await g(f.local, "update-ref", "refs/remotes/origin/main", await g(f.local, "rev-parse", "HEAD"));
+    await g(f.local, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/missing");
+    const state = await f.control.status();
+    assert.equal(state.syncTarget.ref, "origin/missing");
+    assert.equal(state.syncTarget.exists, false);
+    assert.equal(state.syncTarget.behind, null);
+    await assert.rejects(action(f.control, "sync"), /default branch is unavailable/);
+    await g(f.local, "remote", "rename", "origin", "other");
+    assert.equal((await f.control.status()).syncTarget, null);
+    await assert.rejects(action(f.control, "sync"), /default branch is unavailable/);
+});
+
+test("changing origin's default invalidates a prepared sync even when both branches have the same commit", async () => {
+    const f = await fixture({ remote: true });
+    await g(f.local, "remote", "set-head", "origin", "-a");
+    await g(f.local, "update-ref", "refs/remotes/origin/trunk", await g(f.local, "rev-parse", "HEAD"));
+    const state = await f.control.status();
+    const preview = await f.control.prepare({ operation: "sync", revision: state.revision });
+    await g(f.local, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk");
+    await assert.rejects(f.control.execute({ token: preview.token, confirmed: true }), /state changed/);
+});
+
+test("local branches and tags named like origin refs cannot hide the default target", async () => {
+    const f = await fixture({ remote: true });
+    await g(f.local, "branch", "origin/main");
+    await g(f.local, "tag", "origin/main");
+    await publishPeer(f, "incoming.txt");
+    await action(f.control, "fetch", { remote: "origin" });
+    for (const useHead of [false, true]) {
+        if (useHead) await g(f.local, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+        else await g(f.local, "update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD");
+        const state = await f.control.status();
+        assert.equal(state.syncTarget.exists, true);
+        assert.equal(state.syncTarget.ref, "origin/main");
+        assert.equal(state.syncTarget.behind, 1);
+        assert.equal(state.upstream.exists, true);
+        const preview = await f.control.prepare({ operation: "sync", revision: state.revision });
+        assert.match(preview.commands[0], /"origin" "refs\/heads\/main"$/);
+    }
+    await action(f.control, "sync");
+    assert.equal(await readFile(path.join(f.local, "incoming.txt"), "utf8"), "incoming.txt");
+});
+
+test("sync refuses divergence discovered during fetch and retains local commits", async () => {
+    const f = await fixture({ remote: true });
+    await commitFile(f.local, "local-only.txt");
+    const head = await g(f.local, "rev-parse", "HEAD");
+    const state = await f.control.status();
+    assert.equal(state.syncTarget.behind, 0);
+    const preview = await f.control.prepare({ operation: "sync", revision: state.revision });
+    await publishPeer(f, "remote-only.txt");
+    await assert.rejects(f.control.execute({ token: preview.token, confirmed: true }), /pull failed/);
+    assert.equal(await g(f.local, "rev-parse", "HEAD"), head);
+    assert.equal((await f.control.status()).syncTarget.behind, 1);
+});
+
+test("sync blocks dirty trees, detached HEAD and Git operations", async () => {
+    const f = await fixture({ remote: true });
+    await writeFile(path.join(f.local, "file.txt"), "dirty\n");
+    await assert.rejects(action(f.control, "sync"), /clean working tree/);
+    await action(f.control, "stage", { filename: "file.txt" });
+    await assert.rejects(action(f.control, "sync"), /clean working tree/);
+    await action(f.control, "commit", { message: "Local update" });
+    await g(f.local, "checkout", "--detach");
+    await assert.rejects(action(f.control, "sync"), /detached HEAD/);
+    await g(f.local, "checkout", "main");
+    await writeFile(path.join(f.local, ".git", "MERGE_HEAD"), await g(f.local, "rev-parse", "HEAD"));
+    await assert.rejects(action(f.control, "sync"), /current Git operation/);
+});
+
+test("fetch, pull and sync do not prune refs or local tags even when Git configuration enables pruning", async () => {
     const f = await fixture({ remote: true });
     const head = await g(f.local, "rev-parse", "HEAD");
     await g(f.local, "update-ref", "refs/remotes/origin/keep-cached", head);
@@ -238,6 +359,9 @@ test("fetch and pull do not prune refs or local tags even when Git configuration
     assert.equal(await g(f.local, "rev-parse", "refs/remotes/origin/keep-cached"), head);
     assert.equal(await g(f.local, "rev-parse", "refs/tags/keep-local-tag"), head);
     await action(f.control, "pull");
+    assert.equal(await g(f.local, "rev-parse", "refs/remotes/origin/keep-cached"), head);
+    assert.equal(await g(f.local, "rev-parse", "refs/tags/keep-local-tag"), head);
+    await action(f.control, "sync");
     assert.equal(await g(f.local, "rev-parse", "refs/remotes/origin/keep-cached"), head);
     assert.equal(await g(f.local, "rev-parse", "refs/tags/keep-local-tag"), head);
 });

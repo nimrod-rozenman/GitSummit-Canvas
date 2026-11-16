@@ -72,13 +72,44 @@ async function compare(cwd, head, ref, refs) {
     return { ref, oid: target.oid, ahead, behind, incoming, outgoing, files, logLimit: LOG_LIMIT };
 }
 
+async function defaultSyncTarget(cwd, head, remoteRefs, remotes) {
+    if (!remotes.some((remote) => remote.name === "origin")) return null;
+    const result = await git(cwd, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+    if (!result.ok && result.code !== 1) throw new Error(redact(result.stderr));
+    const symbolic = result.ok ? result.stdout.trim() : null;
+    const fullRef = symbolic?.startsWith("refs/remotes/origin/")
+        ? symbolic
+        : !symbolic && remoteRefs.some((item) => item.fullName === "refs/remotes/origin/main") ? "refs/remotes/origin/main" : null;
+    if (!fullRef) return null;
+    const ref = fullRef.slice("refs/remotes/".length);
+    const target = remoteRefs.find((item) => item.fullName === fullRef && !item.symbolic);
+    let ahead = null, behind = null;
+    if (head && target) {
+        const counts = await run(cwd, ["rev-list", "--left-right", "--count", `${head}...${target.oid}`, "--"]);
+        [ahead, behind] = counts.trim().split(/\s+/).map(Number);
+    }
+    return {
+        remote: "origin", ref, remoteRef: "refs/heads/" + ref.slice("origin/".length),
+        source: symbolic ? "origin/HEAD" : "origin/main fallback",
+        exists: Boolean(target), oid: target?.oid ?? null, ahead, behind,
+    };
+}
+
+function fastForwardPull(remote, remoteRef) {
+    return [
+        "-c", "fetch.prune=false", "-c", "fetch.pruneTags=false",
+        "-c", `remote.${remote}.prune=false`, "-c", `remote.${remote}.pruneTags=false`,
+        "pull", "--ff-only", "--no-rebase", "--no-edit", "--no-autostash", "--", remote, remoteRef,
+    ];
+}
+
 export async function readSourceControl(cwd, comparisonRef) {
     const root = (await run(cwd, ["rev-parse", "--show-toplevel"])).trim();
     const [status, branchResult, headResult, refsText, remoteText, gitDir, indexEntries, fetchPath] = await Promise.all([
         run(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
         git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
         git(root, ["rev-parse", "--verify", "HEAD"]),
-        run(root, ["for-each-ref", "--format=%(refname:short)%00%(objectname)%00%(symref)", "refs/remotes/"]),
+        run(root, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", "refs/remotes/"]),
         run(root, ["remote"]),
         run(root, ["rev-parse", "--absolute-git-dir"]),
         run(root, ["ls-files", "--stage", "-z"]),
@@ -89,9 +120,11 @@ export async function readSourceControl(cwd, comparisonRef) {
     const head = headResult.ok ? headResult.stdout.trim() : null;
     if (!head && !branch) throw new Error("Cannot resolve repository HEAD.");
     const files = parseStatus(status);
-    const refs = refsText.trimEnd().split("\n").filter(Boolean).map((line) => {
-        const [name, oid, symbolic] = line.split("\0"); return { name, oid, symbolic };
-    }).filter((ref) => !ref.symbolic);
+    const remoteRefs = refsText.trimEnd().split("\n").filter(Boolean).map((line) => {
+        const [fullName, oid, symbolic] = line.split("\0");
+        return { name: fullName.slice("refs/remotes/".length), fullName, oid, symbolic };
+    });
+    const refs = remoteRefs.filter((ref) => !ref.symbolic);
     const remotes = await Promise.all(remoteText.trim().split("\n").filter(Boolean).map(async (name) => {
         const [fetchUrls, pushUrls] = await Promise.all([
             run(root, ["remote", "get-url", "--all", name]),
@@ -101,9 +134,12 @@ export async function readSourceControl(cwd, comparisonRef) {
     }));
     let upstream = null;
     if (branch) {
-        const tracking = (await run(root, ["for-each-ref", "--format=%(upstream:short)%00%(upstream:remotename)%00%(upstream:remoteref)", `refs/heads/${branch}`])).trimEnd();
-        const [name, remote, remoteRef] = tracking.split("\0");
-        if (name) upstream = { name, remote, remoteRef, exists: refs.some((ref) => ref.name === name) };
+        const tracking = (await run(root, ["for-each-ref", "--format=%(upstream)%00%(upstream:remotename)%00%(upstream:remoteref)", `refs/heads/${branch}`])).trimEnd();
+        const [fullName, remote, remoteRef] = tracking.split("\0");
+        if (fullName) upstream = {
+            name: fullName.replace(/^refs\/(?:remotes|heads)\//, ""), remote, remoteRef,
+            exists: refs.some((ref) => ref.fullName === fullName),
+        };
     }
     const operations = [];
     for (const marker of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "BISECT_LOG"]) {
@@ -139,7 +175,8 @@ export async function readSourceControl(cwd, comparisonRef) {
             } catch (error) { if (error.code === "ENOENT") return [file.path, "missing"]; throw error; }
         })));
     }
-    const revision = hash(JSON.stringify({ head, branch, status, fileStats, index: hash(indexEntries), refs, remotes, upstream, operations }));
+    const syncTarget = await defaultSyncTarget(root, head, remoteRefs, remotes);
+    const revision = hash(JSON.stringify({ head, branch, status, fileStats, index: hash(indexEntries), refs, remotes, upstream, operations, syncTarget }));
     const selected = comparisonRef || (upstream?.exists ? upstream.name : refs.find((ref) => /\/(main|master)$/.test(ref.name))?.name) || refs[0]?.name;
     const comparison = await compare(root, head, selected, refs);
     const trackingComparison = upstream?.exists
@@ -147,7 +184,7 @@ export async function readSourceControl(cwd, comparisonRef) {
         : null;
     return {
         root, name: path.basename(root), branch, head, unborn: !head, detached: !branch,
-        files, refs, remotes, upstream, operations, comparison, revision,
+        files, refs, remotes, upstream, operations, comparison, revision, syncTarget,
         ahead: trackingComparison?.ahead ?? null, behind: trackingComparison?.behind ?? null,
         fetchedAt, refreshedAt: new Date().toISOString(),
     };
@@ -207,22 +244,29 @@ function buildOperation(state, input) {
         commands.push(["fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--", selected.name]);
         title = "Fetch remote";
         detail = `${selected.name}\n${selected.fetchUrl}\nUpdates remote-tracking refs. Does not merge or prune.`;
-    } else if (["pull", "push", "sync"].includes(operation)) {
+    } else if (operation === "sync") {
+        const target = state.syncTarget;
+        if (!state.branch || !state.head) throw new Error("Sync requires a committed local branch, not detached HEAD.");
+        if (!target?.exists) throw new Error("Origin's default branch is unavailable. Fetch origin and check origin/HEAD before syncing.");
+        if (state.operations.length || state.files.some((file) => file.conflict)) throw new Error("Finish the current Git operation and resolve conflicts first.");
+        if (state.files.length) throw new Error("Sync requires a clean working tree and index.");
+        if (target.ahead > 0 && target.behind > 0) throw new Error(`Your branch and ${target.ref} have diverged. Resolve this outside the canvas; sync will not merge or rebase.`);
+        const selected = state.remotes.find((item) => item.name === target.remote);
+        commands.push(fastForwardPull(target.remote, target.remoteRef));
+        title = `Sync from ${target.ref}`;
+        detail = `${target.ref} -> ${state.branch}\nFetch: ${selected.fetchUrl}\n${target.behind} incoming commit(s) at last fetch.\nFetch this branch and fast-forward the current branch only. No push, merge commit, rebase, or autostash.\nDefault source: ${target.source}. Your branch's upstream stays unchanged.`;
+    } else if (["pull", "push"].includes(operation)) {
         const upstream = state.upstream;
         if (!state.branch || !state.head || !upstream?.exists || !upstream.remoteRef?.startsWith("refs/heads/")) throw new Error("This action requires an existing remote upstream branch.");
         const selected = state.remotes.find((item) => item.name === upstream.remote);
         if (!selected) throw new Error("The upstream is not on a configured remote.");
         if (state.operations.length || state.files.some((file) => file.conflict)) throw new Error("Finish the current Git operation and resolve conflicts first.");
-        if (operation !== "push" && state.files.length) throw new Error("Pull and sync require a clean working tree and index.");
+        if (operation !== "push" && state.files.length) throw new Error("Pull requires a clean working tree and index.");
         if (operation !== "push" && state.ahead > 0 && state.behind > 0) throw new Error("Branches have diverged. Resolve the divergence outside this canvas; no merge or rebase will run.");
         if (operation !== "pull" && selected.pushUrl.includes("\n")) throw new Error("Multiple push URLs are not supported. Use Git directly to review each destination.");
-        if (operation !== "push") commands.push([
-            "-c", "fetch.prune=false", "-c", "fetch.pruneTags=false",
-            "-c", `remote.${selected.name}.prune=false`, "-c", `remote.${selected.name}.pruneTags=false`,
-            "pull", "--ff-only", "--no-rebase", "--no-edit", "--", selected.name, upstream.remoteRef,
-        ]);
+        if (operation !== "push") commands.push(fastForwardPull(selected.name, upstream.remoteRef));
         if (operation !== "pull") commands.push(["push", "--", selected.name, `HEAD:${upstream.remoteRef}`]);
-        title = operation === "sync" ? "Sync changes" : operation === "pull" ? "Pull fast-forward only" : "Push commits";
+        title = operation === "pull" ? "Pull fast-forward only" : "Push commits";
         detail = `${state.branch} <-> ${upstream.name}\nFetch: ${selected.fetchUrl}\nPush: ${selected.pushUrl}\n${state.behind} incoming / ${state.ahead} outgoing at last fetch.\nNo force push, merge commit, or rebase.`;
     } else {
         throw new Error("Unsupported Git operation.");

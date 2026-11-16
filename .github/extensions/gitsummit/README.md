@@ -19,8 +19,16 @@ share the same dark palette.
 - Stage and unstage individual files. Unstage preserves working files.
 - Enter a message to commit only the staged changes.
 - Use the Git menu for Fetch, Pull, Push, Sync, and Git Output.
+- Sync fetches origin's default branch and fast-forwards the current branch only.
+  It never pushes or changes the upstream. The button names its target and shows
+  a green border for incoming cached commits.
 - Select a remote-tracking branch to compare committed HEAD with cached remote
-  state. This selection does not change the upstream used for pull or push.
+  state. This selection does not redirect sync, pull, or push.
+
+Sync uses the local `origin/HEAD` symbolic ref. If absent, an existing `origin/main`
+is the fallback. It never chooses another remote or the feature-branch upstream.
+Unknown or missing defaults disable sync. Fetch origin and check `origin/HEAD`
+when the cached default is unavailable or stale.
 
 Commit, fetch, pull, push, and sync require a confirmation that shows the
 repository, destination, and exact commands. Stage and unstage are explicit file
@@ -29,13 +37,16 @@ state. Changed content invalidates a preview.
 
 Pull and sync require a clean index and worktree. Updates are fast-forward-only.
 No force push, rebase, reset, discard, or pruning is exposed. Conflicts, an
-in-progress Git operation, or a missing remote upstream block unsafe actions.
+in-progress Git operation, or divergence block sync. A feature-branch upstream
+is not required for sync, but the separate Pull and Push actions still need one.
 New branches without an upstream must be published outside the canvas.
 
 Refresh reads cached local state. Fetch contacts the upstream remote, or the
 first configured remote if no upstream exists. `FETCH_HEAD` timestamps are
 repository-level metadata and do not prove every remote ref is current.
-Partial sync failures report any successful pull. No automatic retry occurs.
+A failed fast-forward may leave fetched refs updated. No automatic retry occurs.
+The green incoming indicator remains visible when a dirty tree or divergence
+blocks the action; the tooltip explains the blocker.
 
 ## Review tabs
 

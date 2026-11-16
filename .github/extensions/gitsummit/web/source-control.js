@@ -45,16 +45,33 @@
         const conflict = current?.files.some((file) => file.conflict);
         const operation = current?.operations.length;
         const tracksRemote = current?.upstream?.exists && current.remotes.some((remote) => remote.name === current.upstream.remote);
+        const target = current?.syncTarget;
+        const syncBlocked = blocked || !target?.exists || !current?.branch || !current?.head ||
+            current.files.length > 0 || operation || conflict || (target.ahead > 0 && target.behind > 0);
         el("sc-commit").disabled = blocked || !current?.branch || conflict || operation ||
             !current?.files.some((file) => file.staged) || !el("sc-message").value.trim();
-        el("sc-sync").disabled = blocked || !tracksRemote || !current?.head || current.files.length > 0 ||
-            operation || (current.ahead > 0 && current.behind > 0);
-        el("sc-sync").textContent = tracksRemote
-            ? `Sync Changes ${current.behind ?? "?"}\u2193 ${current.ahead ?? "?"}\u2191`
-            : "Sync unavailable - no remote upstream";
+        const sync = el("sc-sync");
+        sync.disabled = syncBlocked;
+        sync.classList.toggle("has-incoming", Boolean(target?.exists && target.behind > 0));
+        sync.textContent = target
+            ? `Sync from ${target.ref} ${target.behind ?? "?"}\u2193`
+            : "Sync unavailable - origin default branch unknown";
+        const syncReason = !target?.exists ? "Fetch origin and check origin/HEAD."
+            : !current.branch || !current.head ? "A committed local branch is required."
+                : operation || conflict ? "Resolve the current Git operation and conflicts first."
+                    : current.files.length ? "A clean working tree and index are required."
+                        : target.ahead > 0 && target.behind > 0 ? "Branches have diverged; resolve this outside the canvas."
+                            : "Fetch and fast-forward the current branch. Never push.";
+        sync.title = `${syncReason} Counts use cached refs. Default source: ${target?.source ?? "unknown"}.`;
         el("sc-menu-button").disabled = busy;
         document.querySelectorAll("[data-op]").forEach((button) => {
             const op = button.dataset.op;
+            if (op === "sync") {
+                button.disabled = syncBlocked;
+                button.textContent = target ? `Sync from ${target.ref}...` : "Sync from origin default branch...";
+                button.title = sync.title;
+                return;
+            }
             button.disabled = blocked || (op === "fetch" ? !current.remotes.length
                 : !tracksRemote || !current.head || operation || conflict ||
                     (op !== "push" && (current.files.length > 0 || (current.ahead > 0 && current.behind > 0))));
