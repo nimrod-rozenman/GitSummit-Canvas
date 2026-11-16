@@ -4,13 +4,14 @@
 
 # GitSummit
 
-### The last look before the pull request.
+### See your code. Understand your changes.
 
-**Source Control and code review in a canvas-capable GitHub Copilot host.**
-Compare local work with remote branches, manage Git changes, and review the code.
+**A visual review canvas for you and your coding agent.** Explore inferred
+dependencies, read change summaries, assess potential impact, and leave inline
+feedback your agent can act on - all alongside your Git workflow.
 
-This is a community extension, not an official host feature or an endorsement by
-the host's vendor.
+*Community-built for canvas-capable GitHub Copilot hosts.
+Not an official GitHub product or endorsement.*
 
 </div>
 
@@ -41,137 +42,81 @@ Viewing the canvas requires a host with canvas-extension support.
 
 ---
 
-## 🔍 Beyond the diff
+## 🧠 From diff to decision
 
-An agent finishes a task and hands you a diff. `git diff` shows you *lines*. A PR view shows you *files, alphabetically*. Neither tells you the thing you actually need before you press **Create pull request**:
+**Understand your code changes - not just the lines that changed.**
 
-> **What did this change actually touch, in what order does it make sense to read it, and which file is going to bite me?**
+GitSummit brings a visual graph, readable summaries, inferred dependencies,
+and change-impact signals into one shared review canvas. Its main purpose is
+to make your changes easier to understand, whether you wrote them or an agent did.
 
-GitSummit answers exactly that — in the gap between *"agent is done"* and *"PR is open"*.
+> **See how the pieces connect. Understand the impact. Review the details.**
 
-It inspects the active session's Git workspace. Its analysis uses local Git output
-and file contents rather than a language server or a project-specific service.
-Source Control provides stage, unstage, commit, fetch, pull, push, and sync
-controls. The three review tabs help explain the code behind those changes.
+Explore changed files as a graph, then follow their inferred connections into
+the diff. File summaries explain what changed. Ask Copilot in chat for
+LLM-generated summaries and deeper explanations while you inspect the code.
+
+Impact and risk analysis highlight changes that deserve attention: removed
+declarations, dependency updates, large edits, and files with many changed
+dependents. Each risk score includes its reasons.
+
+Review a file as a whole or leave inline comments on specific lines. Then ask
+the agent to act on your feedback, keeping the discussion tied to the code
+you are reviewing.
+
+The canvas's built-in summaries, dependency links, and impact signals use local
+text-based heuristics. LLM-generated explanations come from Copilot in chat.
+These signals guide review; they do not prove correctness, security, or test coverage.
 
 ---
 
 ## 🗺️ The four tabs
 
-The screenshots below use a synthetic `example-catalog` repository.
-All code, names, and commits are demonstration data. These are canvas-only
-captures, without account details or the host app's sidebar.
+All screenshots use synthetic code and commits from `example-catalog`, with no personal account details.
 
-<table>
-<tr>
-<td width="25%" valign="top">
-
-### `0` Source Control
-
-**Your worktree and remote, in one view.**
-
-</td>
-<td width="25%" valign="top">
-
-### `1` Diagram
-
-**How the change fits together.**
-
-</td>
-<td width="25%" valign="top">
-
-### `2` Changes
-
-**What each file did, riskiest first.**
-
-</td>
-<td width="25%" valign="top">
-
-### `3` Commits
-
-**The story of the branch.**
-
-</td>
-</tr>
-</table>
-
-### Source Control — local changes and remote comparison
+### Source Control - manage your changes
 
 ![GitSummit Source Control with staged and unstaged example files, remote comparison, and a diff below the controls](docs/screenshots/tab-source-control.png)
 
-Repository controls sit above the selected diff at every window width.
-All tabs use the same dark palette.
+- Stage or unstage individual files, then inspect the diff below.
+- Commit staged changes with confirmation.
+- Compare incoming and outgoing commits using cached remote refs.
+- Sync from origin's default branch. A green border marks incoming commits. Sync never pushes.
 
-- **Stage and unstage:** use the file buttons. Unstage preserves working files.
-- **Commit:** enter a message and confirm the staged changes. Unstaged edits stay separate.
-- **Fetch, pull, push, or sync:** use the Git menu and review the confirmation.
-- **Sync from origin's default branch:** fetch and fast-forward into the current
-  local branch only. Sync never pushes or changes the branch's upstream.
-  A green border marks incoming commits from the default branch.
-- **Compare:** select a remote-tracking branch to see incoming and outgoing
-  commits and differences between its committed tree and local HEAD.
+Sync requires a clean worktree and fast-forwardable history.
+See [Git actions and safety rules](.github/extensions/gitsummit/README.md#source-control) for Fetch, Pull, Push, and sync details.
 
-Remote comparisons use cached refs. Refresh does not fetch. The displayed
-`FETCH_HEAD` time describes the repository, not the freshness of every remote.
-Fetch contacts the upstream remote, or the first configured remote if no upstream
-exists. Changing the comparison selector does not redirect sync, pull, or push.
-Sync always targets origin's default branch from the local `origin/HEAD` ref.
-When that ref is absent, an existing `origin/main` is the fallback. An unknown or
-missing default disables sync rather than selecting another remote or upstream.
-Fetch origin and check `origin/HEAD` if its cached default is unavailable or stale.
-
-Git actions use short-lived, single-use previews bound to repository state.
-Changed content requires a new preview. Pull and sync require a clean worktree
-and use fast-forward-only updates. No force push, rebase, reset, discard, or
-pruning is exposed. Sync does not need a feature-branch upstream; the separate
-Pull and Push actions still require one. The green border remains visible for
-incoming commits when a dirty tree or divergence blocks sync; its tooltip explains
-the blocker. A failed fast-forward may leave remote-tracking refs updated.
-Sync does not retry automatically.
-
-### 🕸️ Diagram — the shape of the change
+### 🕸️ Diagram - see how it connects
 
 ![GitSummit diagram showing dependencies in a synthetic catalog project](docs/screenshots/tab-diagram.png)
 
-A top-to-bottom flow. Changed files are grouped into **layers** by how they depend on each other: the top layer depends on nothing else in the change, each layer below uses the one above it, and files with no links land in **Standalone**. Layers are named after the file the rest of the layer leans on — `Data access` → `Core logic` → `Tests`.
+- Explore changed files in a graph of inferred dependencies.
+- See file summaries, change counts, and risk markers.
+- Hover over a file to highlight its connections.
+- Click a file to open its diff, then return to the graph.
 
-Every card carries the filename, its directory, line counts, `↑used-by` / `↓uses` degrees and a one-line description.
-
-| | |
-| --- | --- |
-| **Solid arrow** | *uses* — points **downward**, from a dependency into the file that consumes it |
-| **Dashed red arrow** | a link this change **removed** |
-| **Ringed card** | flagged: read this one closely |
-| **Hover** | isolates a file and everything it touches |
-| **Click** | jumps to it in **Changes**, with a `↩ Back to diagram` button waiting |
-
-### 📄 Changes — file by file
+### 📄 Changes - review the details
 
 ![GitSummit file summary and diff for synthetic catalog search code](docs/screenshots/tab-changes.png)
 
-Each changed file is a card: status, name, risk, directory, counts, a 1–3 sentence summary, signal chips (`+ createRateLimiter`, `− resetWindow`, `+ ioredis`) and the plain-language reasons behind its risk score.
+- Read file summaries and the reasons behind each risk score.
+- Switch between changed hunks, whole-file context, and full-screen review.
+- Leave file-level or inline comments for the agent.
+- Choose **Triage**, **List**, or **Layers** to set your review order.
 
-Three groupings, one click apart:
-
-- **Triage** *(default)* — riskiest first: **Read closely** → **Worth a look** → **Routine**
-- **List** — flat, ordered by churn
-- **Layers** — the Diagram's ordering, so you read the change in the order it was built
-
-Expand a card for **Changed hunks / Whole file**, **Full screen**, **Open file**,
-and **Comment**. Open file first requests the host's editor canvas. If that is
-unavailable, it can fall back to an installed editor or the system file handler.
-
-### 📜 Commits — where the work went
+### 📜 Commits - follow the story
 
 ![GitSummit commit timeline and directory summary using demonstration data](docs/screenshots/tab-commits.png)
 
-The branch's commit narrative, plus a directory rollup showing where the change is concentrated. Click a directory to filter **Changes** down to it.
+- Follow the branch's commit timeline.
+- See which directories contain the most changes.
+- Click a directory to filter the **Changes** view.
 
 ---
 
-## 🎯 Risk — a heuristic that shows its work
+## 🎯 Risk - a heuristic that shows its work
 
-Every file gets **Risk: none / small / medium / high**. It is a *heuristic*, so it is never presented as a verdict — **every point carries its own reason**, printed right on the card.
+Every file gets **Risk: none / small / medium / high**. It is a *heuristic*, so it is never presented as a verdict - **every point carries its own reason**, printed right on the card.
 
 | Signal | Why it counts |
 | :-- | :-- |
@@ -192,7 +137,7 @@ The header shows the change-wide risk: the worst file, nudged up for each additi
 One filter bar applies to the **three review tabs**: a search box plus
 **Added / Edited / Deleted / Renamed** chips.
 
-The **High risk** chip is deliberately *not* another `AND`. It is an **override** — it shows every flagged file regardless of the other filters, which grey themselves out while it is on.
+The **High risk** chip is deliberately *not* another `AND`. It is an **override** - it shows every flagged file regardless of the other filters, which grey themselves out while it is on.
 
 > **Why:** so nothing risky can hide behind a filter you forgot was set.
 
@@ -200,7 +145,7 @@ The **High risk** chip is deliberately *not* another `AND`. It is an **override*
 
 ## 💬 Review comments → straight back to the agent
 
-Comment on a whole file, or on any individual line in a diff. Comments live in the canvas for the length of the review — **nothing is written into your repository**.
+Comment on a whole file, or on any individual line in a diff. Comments live in the canvas for the length of the review - **nothing is written into your repository**.
 
 **Submit comments** prepares Markdown grouped by file and attempts to copy it to
 the clipboard. The agent can read comments with `get_feedback`. This does not
@@ -248,7 +193,7 @@ In priority order:
 explicit override  →  origin/HEAD (the remote's default branch)  →  first of main / master / develop / trunk
 ```
 
-GitSummit then compares the **working tree** — committed **+** staged **+** unstaged — against the **merge-base** with that ref. Untracked files the agent just created are folded in as new-file additions, so work-in-progress shows up too.
+GitSummit then compares the **working tree** - committed **+** staged **+** unstaged - against the **merge-base** with that ref. Untracked files the agent just created are folded in as new-file additions, so work-in-progress shows up too.
 
 ---
 
@@ -298,12 +243,12 @@ position. Short transitions respect reduced-motion preferences.
 ```mermaid
 flowchart TB
     subgraph host["Copilot CLI session"]
-        AGENT["Agent — open_canvas, actions"]
+        AGENT["Agent - open_canvas, actions"]
     end
 
-    subgraph ext["extension.mjs — separate Node process"]
+    subgraph ext["extension.mjs - separate Node process"]
         SRV["Loopback HTTP server<br/>127.0.0.1, random port"]
-        SSE["SSE stream — /events"]
+        SSE["SSE stream - /events"]
         WATCH["Repo watcher<br/>debounce + fingerprint"]
     end
 
@@ -313,7 +258,7 @@ flowchart TB
         AN["analyze.mjs<br/>summaries, links, risk"]
     end
 
-    UI["web/ — iframe UI<br/>vanilla JS, no framework"]
+    UI["web/ - iframe UI<br/>vanilla JS, no framework"]
     REPO[("Your repository")]
 
     AGENT --> SRV
